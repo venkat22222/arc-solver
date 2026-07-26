@@ -18,15 +18,14 @@ api:
 ollama:
   base_url: "http://localhost:11434"
 
-# Target Kaggle backend — use config.kaggle.yaml on P100, or override CLI.
-# On a 4GB laptop, max_memory CPU-offloads most weights (slow but correct).
+# kaggle_local defaults for local smoke.
+# Qwen3-8B NF4 needs ~5GB+; on a 4GB 3050 Ti prefer Qwen3-4B for generate smoke,
+# or run without max_memory on Kaggle P100 (config.kaggle.yaml).
+# CPU offload of 4-bit layers is broken on Windows bitsandbytes (uint8 re-quantize).
 kaggle_local:
   load_in_4bit: true
   device_map: "auto"
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_compute_dtype: "float16"
   bnb_4bit_use_double_quant: true
-  # Leave unset on Kaggle P100 (16GB). For 3050 Ti smoke, keep tight GPU budget:
-  max_memory:
-    0: "3200MB"
-    cpu: "24GB"
+  llm_int8_enable_fp32_cpu_offload: false

@@ -74,11 +74,17 @@ class LLMClient:
                 )
             compute = self.kwargs.get("bnb_4bit_compute_dtype", "float16")
             compute_dtype = getattr(torch, compute) if isinstance(compute, str) else compute
+            # Allow GPU↔CPU offload when max_memory spills layers (laptop 4GB smoke).
+            # On P100 with full GPU fit this flag is harmless.
+            enable_fp32_cpu_offload = bool(
+                self.kwargs.get("llm_int8_enable_fp32_cpu_offload", True)
+            )
             quant = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=compute_dtype,
                 bnb_4bit_quant_type=self.kwargs.get("bnb_4bit_quant_type", "nf4"),
                 bnb_4bit_use_double_quant=bool(self.kwargs.get("bnb_4bit_use_double_quant", True)),
+                llm_int8_enable_fp32_cpu_offload=enable_fp32_cpu_offload,
             )
 
         print(f"[kaggle_local] loading tokenizer: {self.model_name}")
@@ -108,6 +114,11 @@ class LLMClient:
             load_kwargs["max_memory"] = {
                 (int(k) if str(k).isdigit() else k): v for k, v in dict(max_memory).items()
             }
+            # Disk spill folder when RAM is tight during offload
+            offload_folder = self.kwargs.get("offload_folder")
+            if offload_folder:
+                Path(offload_folder).mkdir(parents=True, exist_ok=True)
+                load_kwargs["offload_folder"] = str(offload_folder)
 
         print(
             f"[kaggle_local] loading model 4bit={load_in_4bit} "
@@ -437,11 +448,15 @@ class LLMClient:
             "pad_token_id": self._hf_tokenizer.pad_token_id,
             "eos_token_id": self._hf_tokenizer.eos_token_id,
         }
+        # Qwen3 ships a sampling GenerationConfig; override explicitly for greedy.
         if temperature and temperature > 0:
             gen_kwargs["do_sample"] = True
             gen_kwargs["temperature"] = float(temperature)
         else:
             gen_kwargs["do_sample"] = False
+            gen_kwargs["temperature"] = None
+            gen_kwargs["top_p"] = None
+            gen_kwargs["top_k"] = None
 
         with torch.inference_mode():
             output_ids = self._hf_model.generate(**inputs, **gen_kwargs)

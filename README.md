@@ -19,13 +19,15 @@ pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-Smoke-test load + generate (slow on a 4GB laptop; uses CPU offload via `config.yaml` `max_memory`):
+Smoke-test load + generate (CUDA torch required). On a **4GB** laptop use Qwen3-4B; target **Qwen3-8B** on Kaggle P100:
 
 ```bash
-python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B --max-tokens 32
+python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-4B --max-tokens 32
+# Kaggle / 16GB GPU:
+# python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B --max-tokens 32
 ```
 
-Kaggle target config: `config.kaggle.yaml` (P100, no CPU offload). Notebook: `notebooks/kaggle_submission.ipynb`.
+Kaggle target config: `config.kaggle.yaml`. Notebook: `notebooks/kaggle_submission.ipynb`. Setup notes: `docs/KAGGLE_SETUP.md`.
 
 For local smoke tests with Ollama:
 

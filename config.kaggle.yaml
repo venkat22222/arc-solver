@@ -17,5 +17,5 @@ kaggle_local:
   bnb_4bit_compute_dtype: "float16"
   bnb_4bit_use_double_quant: true
   trust_remote_code: true
-  # P100 16GB — no CPU offload needed for 8B NF4
-  # max_memory: omit
+  llm_int8_enable_fp32_cpu_offload: false
+  # P100 16GB fits Qwen3-8B NF4 without CPU offload

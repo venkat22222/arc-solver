@@ -1,14 +1,12 @@
-"""Smoke-test kaggle_local: load Qwen3-8B (4-bit) and generate one short reply.
+"""Smoke-test kaggle_local: load a Qwen3 model (4-bit) and generate one short reply.
 
-Expect this to be slow on a 4GB laptop GPU (CPU offload). Goal is correctness,
-not speed — catch import / device_map / generate bugs before Kaggle.
+On a 4GB laptop GPU, prefer Qwen3-4B for a full generate smoke (same client code).
+Qwen3-8B NF4 needs ~5GB+ VRAM; CPU offload of 4-bit layers is currently broken on
+Windows bitsandbytes (uint8 re-quantize). Use config.kaggle.yaml on P100 for 8B.
 
 Usage:
-  pip install -r requirements.txt
-  # CUDA torch (example):
-  #   pip install torch --index-url https://download.pytorch.org/whl/cu124
-  python -m scripts.smoke_kaggle_local
-  python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B --max-tokens 32
+  python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-4B
+  python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B
 """
 
 from __future__ import annotations
@@ -30,36 +28,53 @@ def main() -> None:
     ap.add_argument("--config", default=None, help="Optional config.yaml path")
     ap.add_argument("--max-tokens", type=int, default=64)
     ap.add_argument("--prompt", default="Reply with exactly: PONG")
-    ap.add_argument("--no-4bit", action="store_true", help="Disable bitsandbytes (needs lots of RAM)")
+    ap.add_argument("--no-4bit", action="store_true")
     args = ap.parse_args()
 
-    cfg = load_config(args.config) if args.config else {}
+    cfg = load_config(args.config) if args.config else load_config()
     kl = dict(cfg.get("kaggle_local") or {})
     if args.no_4bit:
         kl["load_in_4bit"] = False
         kl.setdefault("torch_dtype", "float16")
 
-    # Ensure laptop offload defaults if not provided
     kl.setdefault("load_in_4bit", True)
     kl.setdefault("device_map", "auto")
-    if "max_memory" not in kl and kl.get("load_in_4bit"):
-        kl["max_memory"] = {0: "3200MB", "cpu": "24GB"}
+    kl.setdefault("llm_int8_enable_fp32_cpu_offload", False)
 
     print("=== smoke_kaggle_local ===")
     try:
         import torch
 
-        print(f"torch={torch.__version__} cuda={torch.cuda.is_available()} "
-              f"cuda_ver={torch.version.cuda}")
+        print(
+            f"torch={torch.__version__} cuda={torch.cuda.is_available()} "
+            f"cuda_ver={torch.version.cuda}"
+        )
         if torch.cuda.is_available():
-            print(f"gpu={torch.cuda.get_device_name(0)} "
-                  f"vram={torch.cuda.get_device_properties(0).total_memory/1e9:.2f}GB")
+            props = torch.cuda.get_device_properties(0)
+            print(
+                f"gpu={torch.cuda.get_device_name(0)} "
+                f"vram={props.total_memory / 1e9:.2f}GB"
+            )
     except ImportError as e:
         print("FAIL: torch not installed:", e)
         sys.exit(1)
 
     t0 = time.time()
-    client = LLMClient(backend="kaggle_local", model_name=args.model, **kl)
+    try:
+        client = LLMClient(backend="kaggle_local", model_name=args.model, **kl)
+    except ValueError as e:
+        msg = str(e)
+        if "CPU or the disk" in msg or "enough GPU RAM" in msg:
+            print("FAIL: model does not fit in GPU VRAM without 4-bit CPU offload.")
+            print(
+                "On Windows, bitsandbytes CPU-offload of 4-bit weights breaks at "
+                "generate-time (uint8 re-quantize). Options:"
+            )
+            print("  1) Smoke with a smaller twin: --model Qwen/Qwen3-4B")
+            print("  2) Run Qwen3-8B on Kaggle P100 via config.kaggle.yaml")
+            print("Detail:", msg[:300])
+            sys.exit(3)
+        raise
     load_s = time.time() - t0
     print(f"load_seconds={load_s:.1f}")
 

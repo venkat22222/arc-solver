@@ -31,7 +31,12 @@ git push -u origin master
 ## 3. Local smoke (already scripted)
 
 ```powershell
+# Full generate smoke on 4GB GPU (same kaggle_local client path as Kaggle)
+python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-4B --max-tokens 32
+
+# Qwen3-8B: weights download + 4-bit load validated; generate needs >=~8–16GB VRAM
+# (4-bit CPU offload is broken on Windows bitsandbytes). Use Kaggle P100:
 python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B --max-tokens 32
 ```
 
-Uses `config.yaml` `max_memory` CPU offload on 4GB GPUs. On Kaggle P100 use `config.kaggle.yaml` (no offload).
+Pinned local stack that works: `torch 2.6+cu124`, `transformers 4.51.3`, `bitsandbytes 0.45.5`, `accelerate 1.2.1`.

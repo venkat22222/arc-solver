@@ -4,6 +4,8 @@ numpy
 scipy
 
 # kaggle_local backend (install CUDA torch separately — see README)
-transformers>=4.51.0
-accelerate>=0.33.0
-bitsandbytes>=0.43.0
+# Pin for Qwen3 + bitsandbytes CPU-offload smoke (transformers 5.x hits meta-tensor bugs)
+transformers>=4.51.0,<5
+accelerate>=0.33.0,<1.3
+bitsandbytes>=0.43.0,<0.46
+huggingface-hub>=0.30.0,<1.0
