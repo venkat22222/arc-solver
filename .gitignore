@@ -1,0 +1,33 @@
+# Secrets / local env — never commit
+.env
+.env.*
+!.env.example
+
+# Results / caches
+stress_results*.json
+diag_25_results.json
+diag_*.json
+_gemini_model.txt
+submission.json
+*.submission.json
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# Local HF / torch caches (never commit)
+.cache/
+huggingface/
+*.bin
+*.safetensors
+*.gguf
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

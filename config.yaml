@@ -1,0 +1,32 @@
+# Laptop / Ollama default
+backend: "ollama"
+model_name: "qwen2.5:7b"
+n_abstractions_per_puzzle: 3
+max_self_debug_retries: 3
+n_judges: 3
+total_time_budget_hours: 12
+data_dir: "./data/arc-agi-2"
+early_stop_after_cycles: 3
+sandbox_timeout_seconds: 5
+connectivity: 4
+
+api:
+  provider: "gemini"
+  base_url: "https://generativelanguage.googleapis.com"
+  api_key_env: "GEMINI_API_KEY"
+
+ollama:
+  base_url: "http://localhost:11434"
+
+# Target Kaggle backend — use config.kaggle.yaml on P100, or override CLI.
+# On a 4GB laptop, max_memory CPU-offloads most weights (slow but correct).
+kaggle_local:
+  load_in_4bit: true
+  device_map: "auto"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_use_double_quant: true
+  # Leave unset on Kaggle P100 (16GB). For 3050 Ti smoke, keep tight GPU budget:
+  max_memory:
+    0: "3200MB"
+    cpu: "24GB"

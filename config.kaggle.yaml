@@ -1,0 +1,21 @@
+# Kaggle P100 / real target run — Qwen3-8B 4-bit in-process
+backend: "kaggle_local"
+model_name: "Qwen/Qwen3-8B"
+n_abstractions_per_puzzle: 3
+max_self_debug_retries: 3
+n_judges: 3
+total_time_budget_hours: 12
+data_dir: "/kaggle/input/arc-prize-2025"
+early_stop_after_cycles: 3
+sandbox_timeout_seconds: 5
+connectivity: 4
+
+kaggle_local:
+  load_in_4bit: true
+  device_map: "auto"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_use_double_quant: true
+  trust_remote_code: true
+  # P100 16GB — no CPU offload needed for 8B NF4
+  # max_memory: omit
