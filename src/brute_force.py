@@ -127,13 +127,13 @@ def try_brute_force(train_pairs: Sequence[TrainPair]) -> Optional[BruteForceHit]
     if not train_pairs:
         return None
 
-    # STAGE 0: Unary transforms & simple pairs (conservative grouping)
+    # STAGE 0: Unary transforms
     unaries = _unary_candidates()
     for name, fn, expr in unaries:
         if _matches_all(fn, train_pairs):
             return BruteForceHit(name=name, code=_code_return(expr), n_ops=1, stage=0, candidate_name=name)
 
-    # (moved simple pairs to Stage 0 per instructions "put in Stage 0 for now rather than guessing")
+    # STAGE 1: Simple pairs of unaries
     for name_f, fn_f, expr_f in unaries:
         if name_f == "identity": continue
         for name_g, fn_g, expr_g in unaries:
@@ -143,11 +143,7 @@ def try_brute_force(train_pairs: Sequence[TrainPair]) -> Optional[BruteForceHit]
                 inner = expr_f
                 outer = expr_g.replace("(grid)", f"({inner})", 1)
                 name = f"{name_g}_of_{name_f}"
-                return BruteForceHit(name=name, code=_code_return(outer), n_ops=2, stage=0, candidate_name=name)
-
-    # STAGE 1: Stub (Empty)
-    # We will add composition logic in the next step deliberately
-    pass
+                return BruteForceHit(name=name, code=_code_return(outer), n_ops=2, stage=1, candidate_name=name)
 
     # STAGE 2: Parameter-sweep-style candidates
     for direction in ("up", "down", "left", "right"):
