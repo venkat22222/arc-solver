@@ -6,6 +6,7 @@ re-implementing common operations from scratch.
 
 from __future__ import annotations
 
+import inspect
 from collections import Counter
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Sequence, Tuple
@@ -21,31 +22,33 @@ Direction = Literal["up", "down", "left", "right"]
 # ---------------------------------------------------------------------------
 
 def rotate_90(grid: Grid) -> Grid:
-    """Rotate 90° clockwise."""
+    """Rotate a grid 90° clockwise."""
     h, w = grid_shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
 
 
 def rotate_180(grid: Grid) -> Grid:
+    """Rotate a grid 180°."""
     return [row[::-1] for row in grid[::-1]]
 
 
 def rotate_270(grid: Grid) -> Grid:
-    """Rotate 90° counter-clockwise (== 270° clockwise)."""
+    """Rotate a grid 270° clockwise (90° counter-clockwise)."""
     return rotate_90(rotate_90(rotate_90(grid)))
 
 
 def reflect_horizontal(grid: Grid) -> Grid:
-    """Mirror left↔right."""
+    """Reflect a grid horizontally (left-right mirror flip)."""
     return [row[::-1] for row in grid]
 
 
 def reflect_vertical(grid: Grid) -> Grid:
-    """Mirror top↔bottom."""
+    """Reflect a grid vertically (top-bottom mirror flip)."""
     return grid[::-1]
 
 
 def transpose(grid: Grid) -> Grid:
+    """Transpose rows and columns of a grid."""
     h, w = grid_shape(grid)
     return [[grid[r][c] for r in range(h)] for c in range(w)]
 
@@ -55,18 +58,22 @@ def transpose(grid: Grid) -> Grid:
 # ---------------------------------------------------------------------------
 
 def recolor(grid: Grid, from_color: int, to_color: int) -> Grid:
+    """Replace all cells of from_color with to_color in grid."""
     return [[to_color if c == from_color else c for c in row] for row in grid]
 
 
 def count_color(grid: Grid, color: int) -> int:
+    """Count number of cells matching color (int 0-9) in grid."""
     return sum(1 for row in grid for c in row if c == color)
 
 
 def count_objects(grid: Grid, connectivity: int = 4) -> int:
+    """Count connected components of non-background cells (connectivity 4 or 8)."""
     return len(find_objects(grid, connectivity=connectivity))  # type: ignore[arg-type]
 
 
 def find_largest_object(grid: Grid, connectivity: int = 4) -> Optional[ObjectInfo]:
+    """Return the largest ObjectInfo dataclass by size (cells count), or None if empty."""
     objs = find_objects(grid, connectivity=connectivity)  # type: ignore[arg-type]
     if not objs:
         return None
@@ -74,6 +81,7 @@ def find_largest_object(grid: Grid, connectivity: int = 4) -> Optional[ObjectInf
 
 
 def find_smallest_object(grid: Grid, connectivity: int = 4) -> Optional[ObjectInfo]:
+    """Return the smallest ObjectInfo dataclass by size (cells count), or None if empty."""
     objs = find_objects(grid, connectivity=connectivity)  # type: ignore[arg-type]
     if not objs:
         return None
@@ -81,7 +89,7 @@ def find_smallest_object(grid: Grid, connectivity: int = 4) -> Optional[ObjectIn
 
 
 def crop_to_bounding_box(grid: Grid, connectivity: int = 4) -> Grid:
-    """Crop to the bounding box of all non-background cells."""
+    """Crop grid to the bounding box enclosing all non-background cells."""
     bg = background_color(grid)
     h, w = grid_shape(grid)
     cells = [(r, c) for r in range(h) for c in range(w) if grid[r][c] != bg]
@@ -99,14 +107,14 @@ def crop_to_bounding_box(grid: Grid, connectivity: int = 4) -> Grid:
 # ---------------------------------------------------------------------------
 
 def tile_grid(grid: Grid, n_rows: int, n_cols: int) -> Grid:
-    """Repeat the grid into an n_rows × n_cols block tiling."""
+    """Repeat grid into an n_rows × n_cols block tiling."""
     if n_rows < 1 or n_cols < 1:
         raise ValueError("n_rows and n_cols must be >= 1")
     return [row * n_cols for _ in range(n_rows) for row in grid]
 
 
 def overlay(grid_a: Grid, grid_b: Grid, transparent: int = 0) -> Grid:
-    """Overlay B onto A; transparent cells in B leave A's value."""
+    """Overlay grid_b onto grid_a; cells in grid_b with transparent color do not overwrite grid_a."""
     ha, wa = grid_shape(grid_a)
     hb, wb = grid_shape(grid_b)
     h, w = max(ha, hb), max(wa, wb)
@@ -126,7 +134,7 @@ def overlay(grid_a: Grid, grid_b: Grid, transparent: int = 0) -> Grid:
 # ---------------------------------------------------------------------------
 
 def gravity_drop(grid: Grid, direction: Direction = "down") -> Grid:
-    """Slide non-background cells until blocked by another cell or the edge."""
+    """Slide non-background cells in direction ('up'|'down'|'left'|'right') until blocked."""
     bg = background_color(grid)
     h, w = grid_shape(grid)
     out = [[bg for _ in range(w)] for _ in range(h)]
@@ -153,7 +161,7 @@ def gravity_drop(grid: Grid, direction: Direction = "down") -> Grid:
 
 
 def fill_enclosed_regions(grid: Grid, fill_color: int) -> Grid:
-    """Fill background regions not connected to the border."""
+    """Fill background regions enclosed by non-background cells and not touching borders with fill_color."""
     bg = background_color(grid)
     h, w = grid_shape(grid)
     out = [row[:] for row in grid]
@@ -199,7 +207,7 @@ class AxisInfo:
 
 
 def symmetry_axis(grid: Grid) -> AxisInfo:
-    """Detect the simplest reflection symmetry axis, if any."""
+    """Detect reflection symmetry axis; returns AxisInfo(kind='horizontal'|'vertical'|'none', index=...)."""
     if grid == reflect_vertical(grid):
         h = len(grid)
         return AxisInfo(kind="horizontal", index=h // 2)
@@ -239,37 +247,102 @@ PRIMITIVES = {
 def primitive_signatures() -> List[str]:
     """Human-readable signatures for prompt injection."""
     return [
-        "rotate_90(grid) -> grid",
-        "rotate_180(grid) -> grid",
-        "rotate_270(grid) -> grid",
-        "reflect_horizontal(grid) -> grid",
-        "reflect_vertical(grid) -> grid",
-        "transpose(grid) -> grid",
-        "recolor(grid, from_color, to_color) -> grid",
-        "find_objects(grid, connectivity=4) -> List[Object]",
-        "find_largest_object(grid) -> Object | None",
-        "find_smallest_object(grid) -> Object | None",
-        "gravity_drop(grid, direction) -> grid  # direction in up|down|left|right",
-        "tile_grid(grid, n_rows, n_cols) -> grid",
-        "fill_enclosed_regions(grid, fill_color) -> grid",
-        "count_objects(grid) -> int",
-        "count_color(grid, color) -> int",
-        "crop_to_bounding_box(grid) -> grid",
-        "overlay(grid_a, grid_b, transparent=0) -> grid",
-        "symmetry_axis(grid) -> AxisInfo",
-        "background_color(grid) -> int",
+        "rotate_90(grid: List[List[int]]) -> List[List[int]]",
+        "rotate_180(grid: List[List[int]]) -> List[List[int]]",
+        "rotate_270(grid: List[List[int]]) -> List[List[int]]",
+        "reflect_horizontal(grid: List[List[int]]) -> List[List[int]]",
+        "reflect_vertical(grid: List[List[int]]) -> List[List[int]]",
+        "transpose(grid: List[List[int]]) -> List[List[int]]",
+        "recolor(grid: List[List[int]], from_color: int, to_color: int) -> List[List[int]]",
+        "find_objects(grid: List[List[int]], connectivity: int = 4) -> List[ObjectInfo]",
+        "find_largest_object(grid: List[List[int]], connectivity: int = 4) -> Optional[ObjectInfo]",
+        "find_smallest_object(grid: List[List[int]], connectivity: int = 4) -> Optional[ObjectInfo]",
+        "gravity_drop(grid: List[List[int]], direction: str = 'down') -> List[List[int]]",
+        "tile_grid(grid: List[List[int]], n_rows: int, n_cols: int) -> List[List[int]]",
+        "fill_enclosed_regions(grid: List[List[int]], fill_color: int) -> List[List[int]]",
+        "count_objects(grid: List[List[int]], connectivity: int = 4) -> int",
+        "count_color(grid: List[List[int]], color: int) -> int",
+        "crop_to_bounding_box(grid: List[List[int]], connectivity: int = 4) -> List[List[int]]",
+        "overlay(grid_a: List[List[int]], grid_b: List[List[int]], transparent: int = 0) -> List[List[int]]",
+        "symmetry_axis(grid: List[List[int]]) -> AxisInfo",
+        "background_color(grid: List[List[int]]) -> int",
     ]
 
 
-def library_source_for_sandbox() -> str:
-    """Return source that defines primitives inside the sandbox namespace.
+def list_primitive_names() -> List[str]:
+    """Names of all 19 primitives available to generated code."""
+    return list(PRIMITIVES)
 
-    Generated solve() code can call these by name when this preamble is
-    prepended before exec. Kept intentionally self-contained (no imports
-    of project modules) so the sandbox stays closed.
+
+def _format_type(annotation: object) -> str:
+    if annotation is inspect.Signature.empty:
+        return ""
+    if annotation is None or annotation is type(None):
+        return "None"
+    s = str(annotation)
+    s = s.replace("typing.", "").replace("src.preprocess.", "").replace("src.library.", "")
+    if hasattr(annotation, "__name__"):
+        s = getattr(annotation, "__name__")
+    elif hasattr(annotation, "_name") and getattr(annotation, "_name"):
+        name = getattr(annotation, "_name")
+        args = getattr(annotation, "__args__", None)
+        if args:
+            args_str = ", ".join(_format_type(a) for a in args)
+            s = f"{name}[{args_str}]"
+        else:
+            s = name
+    return s
+
+
+def generate_library_schema() -> str:
+    """Build a compact, exact API schema for prompt injection.
+
+    Uses ``inspect`` to derive the real parameter names, defaults, and
+    type hints from each primitive, plus its one-line docstring. Generated
+    code must call these functions with exactly these signatures.
     """
-    # For Week 1 we inject signatures into prompts and also provide a
-    # restricted in-process helper set via get_sandbox_helpers().
+    lines = ["Available helper primitives (exact signatures & docstrings):"]
+    for name in list_primitive_names():
+        fn = PRIMITIVES[name]
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            sig = inspect.Signature()
+        params = []
+        for pname, p in sig.parameters.items():
+            if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                continue
+            default = "" if p.default is inspect.Parameter.empty else f"={p.default!r}"
+            ann = ""
+            if p.annotation is not inspect.Parameter.empty:
+                ann = f": {_format_type(p.annotation)}"
+            params.append(f"{pname}{ann}{default}")
+        ret = sig.return_annotation
+        ret_str = ""
+        if ret is not inspect.Signature.empty:
+            ret_str = f" -> {_format_type(ret)}"
+        doc = (fn.__doc__ or "").strip().splitlines()
+        doc_str = f"  # {doc[0]}" if doc else ""
+        lines.append(f"- {name}({', '.join(params)}){ret_str}{doc_str}")
+
+    lines.append("")
+    lines.append("ObjectInfo structure (returned by find_objects, find_largest_object, find_smallest_object):")
+    lines.append("- obj.id: int (component ID)")
+    lines.append("- obj.color: int (color 0-9)")
+    lines.append("- obj.size: int (cell count)")
+    lines.append("- obj.bbox: tuple[int, int, int, int] (r0, c0, r1, c1 inclusive)")
+    lines.append("- obj.shape_pixels: tuple[tuple[int, int], ...] (coordinates relative to bbox top-left)")
+    lines.append("- obj.shape_name: str (e.g. 'single-pixel', 'L-tromino', 'blob(...)')")
+    lines.append("CRITICAL: ObjectInfo is a dataclass, NOT an iterable (do NOT write `for p in obj:`).")
+    lines.append("To iterate cells in grid coordinates:")
+    lines.append("  for (dr, dc) in obj.shape_pixels:")
+    lines.append("      r, c = obj.bbox[0] + dr, obj.bbox[1] + dc")
+
+    return "\n".join(lines)
+
+
+def library_source_for_sandbox() -> str:
+    """Return source that defines primitives inside the sandbox namespace."""
     return ""
 
 
@@ -279,7 +352,4 @@ def get_sandbox_helpers() -> dict:
 
 
 def format_library_for_prompt() -> str:
-    lines = ["Available helper primitives:"]
-    for sig in primitive_signatures():
-        lines.append(f"- {sig}")
-    return "\n".join(lines)
+    return generate_library_schema()

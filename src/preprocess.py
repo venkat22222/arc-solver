@@ -146,6 +146,45 @@ def raw_grid_text(grid: Grid) -> str:
     return "\n".join(" ".join(str(c) for c in row) for row in grid)
 
 
+def cell_changes(
+    input_grid: Grid, output_grid: Grid
+) -> List[Tuple[int, int, int, int]]:
+    """Same-size grids only: list of (row, col, old_color, new_color) that differ."""
+    ih, iw = grid_shape(input_grid)
+    oh, ow = grid_shape(output_grid)
+    if (ih, iw) != (oh, ow):
+        return []
+    return [
+        (r, c, input_grid[r][c], output_grid[r][c])
+        for r in range(ih)
+        for c in range(iw)
+        if input_grid[r][c] != output_grid[r][c]
+    ]
+
+
+def format_cell_diff(input_grid: Grid, output_grid: Grid) -> Optional[str]:
+    """Text block of changed cells, or None when sizes differ / nothing changed."""
+    ih, iw = grid_shape(input_grid)
+    oh, ow = grid_shape(output_grid)
+    if (ih, iw) != (oh, ow):
+        return None
+    changes = cell_changes(input_grid, output_grid)
+    if not changes:
+        return "Changed cells: (none — output identical to input)"
+    lines = [f"Changed cells ({len(changes)} of {ih * iw}):"]
+    # Compact mask: . = same, X = changed
+    mask = []
+    changed = {(r, c) for r, c, _, _ in changes}
+    for r in range(ih):
+        mask.append(" ".join("X" if (r, c) in changed else "." for c in range(iw)))
+    lines.append("Diff mask (. = same, X = changed):")
+    lines.extend(mask)
+    lines.append("Changes (row, col): old -> new:")
+    for r, c, old, new in changes:
+        lines.append(f"  ({r},{c}): {old} -> {new}")
+    return "\n".join(lines)
+
+
 def describe_grid(
     grid: Grid,
     connectivity: Connectivity = 4,
@@ -194,7 +233,11 @@ def describe_pair(
     out = describe_grid(
         output_grid, connectivity=connectivity, include_raw=include_raw, label="Output"
     )
-    return f"{header}\n--- INPUT ---\n{inp}\n--- OUTPUT ---\n{out}"
+    parts = [header, "--- INPUT ---", inp, "--- OUTPUT ---", out]
+    diff = format_cell_diff(input_grid, output_grid)
+    if diff is not None:
+        parts.extend(["--- CELL DIFF (same-size only) ---", diff])
+    return "\n".join(parts)
 
 
 def describe_train_pairs(
@@ -208,3 +251,27 @@ def describe_train_pairs(
         for i, (inp, out) in enumerate(train_pairs, start=1)
     ]
     return "\n\n".join(blocks)
+
+
+def should_include_raw(
+    train_pairs: Sequence[Tuple[Grid, Grid]],
+    connectivity: Connectivity = 4,
+) -> bool:
+    """Include raw grids only when object lists are ambiguous (Topic F).
+
+    Skip raw by default when every train grid has a usable object list —
+    saves prompt tokens on P100 / API. Fall back to raw when objects are
+    missing or extremely fragmented.
+    """
+    if not train_pairs:
+        return True
+    for inp, out in train_pairs:
+        for g in (inp, out):
+            bg = background_color(g)
+            objs = find_objects(g, connectivity=connectivity, bg=bg)
+            if not objs:
+                return True
+            # Too many tiny fragments → object list is noise; raw is clearer.
+            if len(objs) > 18:
+                return True
+    return False

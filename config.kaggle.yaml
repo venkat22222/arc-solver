@@ -9,6 +9,11 @@ data_dir: "/kaggle/input/arc-prize-2025"
 early_stop_after_cycles: 3
 sandbox_timeout_seconds: 5
 connectivity: 4
+triage_enabled: true
+max_effort: 4
+partial_escalate_threshold: 0.5
+close_escalate_threshold: 0.8
+hyp_dedupe_threshold: 0.45
 
 kaggle_local:
   load_in_4bit: true

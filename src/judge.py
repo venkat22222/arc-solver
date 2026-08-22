@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .prompts.judge_prompt import build_judge_prompt
 from .tiebreak import mdl_score
+from .transfer import transfer_risk
 
 
 @dataclass
@@ -18,6 +19,9 @@ class Candidate:
     verification_summary: str = "verified on all train pairs"
     candidate_id: Optional[int] = None
     output_grids: Optional[List[List[List[int]]]] = None  # applied to test inputs
+    train_pairs: Optional[Sequence] = None  # optional, for transfer heuristic
+    mean_partial_credit: Optional[float] = None
+    transfer_confidence: Optional[float] = None
 
 
 def parse_ranked_choice(response: str) -> Tuple[Optional[int], Optional[int]]:
@@ -48,17 +52,34 @@ def _answer_key(candidate: Candidate) -> str:
     return repr(candidate.output_grids)
 
 
+def _annotate_transfer(candidate: Candidate) -> float:
+    if candidate.transfer_confidence is not None:
+        return candidate.transfer_confidence
+    risk = transfer_risk(candidate.code, candidate.train_pairs)
+    conf = 1.0 - risk
+    candidate.transfer_confidence = conf
+    return conf
+
+
 def get_top_distinct_answers(
     scores: dict[int, int],
     candidates: Sequence[Candidate],
     n: int = 2,
 ) -> List[Candidate]:
-    """Pick top-N by judge score, skipping duplicate final answers."""
-    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    """Pick top-N by judge score, then transfer confidence, then MDL."""
+    ranked = sorted(
+        scores.items(),
+        key=lambda kv: (
+            -kv[1],
+            -_annotate_transfer(candidates[kv[0] - 1])
+            if 0 <= kv[0] - 1 < len(candidates)
+            else 0.0,
+            kv[0],
+        ),
+    )
     chosen: List[Candidate] = []
     seen = set()
     for idx, _score in ranked:
-        # Judge uses 1-based indices
         i = idx - 1
         if i < 0 or i >= len(candidates):
             continue
@@ -70,11 +91,10 @@ def get_top_distinct_answers(
         if len(chosen) >= n:
             break
 
-    # Fill from remaining candidates by MDL if judge didn't give enough
     if len(chosen) < n:
         remaining = sorted(
             (c for c in candidates if _answer_key(c) not in seen),
-            key=lambda c: mdl_score(c.code),
+            key=lambda c: (-_annotate_transfer(c), mdl_score(c.code)),
         )
         for c in remaining:
             chosen.append(c)
@@ -88,7 +108,7 @@ def holistic_judge(llm_client, candidates: Sequence[Candidate], n_judges: int = 
     if len(candidates) <= 1:
         return list(candidates)
     if len(candidates) == 2:
-        return list(candidates)
+        return sorted(candidates, key=lambda c: (-_annotate_transfer(c), mdl_score(c.code)))
 
     prompt = build_judge_prompt(candidates)
     votes = []
@@ -97,6 +117,7 @@ def holistic_judge(llm_client, candidates: Sequence[Candidate], n_judges: int = 
         votes.append(parse_ranked_choice(response))
     scores = weighted_score(votes)
     if not scores:
-        # Judge failed to parse — fall back to MDL ordering
-        return sorted(candidates, key=lambda c: mdl_score(c.code))[:2]
+        return sorted(
+            candidates, key=lambda c: (-_annotate_transfer(c), mdl_score(c.code))
+        )[:2]
     return get_top_distinct_answers(scores, candidates, n=2)

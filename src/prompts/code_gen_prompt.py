@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ..library import format_library_for_prompt
+from ..library import format_library_for_prompt, generate_library_schema
 
 _FEW_SHOT = """
 Examples of correct solve() functions (call helpers directly — do not reimplement them):
@@ -47,27 +47,45 @@ per-object loops unless the hypothesis explicitly requires treating objects sepa
 """
 
 
+_STRICT_SCHEMA_RULE = """
+STRICT HELPER RULES:
+- You may ONLY call the exact helper functions listed above with their exact signatures.
+- Any other function name (e.g. hallucinated helpers like `get_bounding_box`, `flood_fill`, `find_components`, `scipy.*`, `np.*`), or a real function called with wrong argument types/order, will cause immediate execution failure.
+- No imports allowed (no `import ...`). All allowed helpers and safe builtins are already in scope.
+- CRITICAL: Any object returned by find_objects, find_largest_object, or find_smallest_object is an ObjectInfo dataclass, NOT an iterable. Writing `for p in obj:` or `for r, c in obj:` will raise TypeError.
+  Access its documented attributes explicitly:
+  - obj.id (int)
+  - obj.color (int)
+  - obj.size (int)
+  - obj.bbox (tuple: r0, c0, r1, c1)
+  - obj.shape_pixels (tuple of (dr, dc) relative to bbox)
+  - obj.shape_name (str)
+  To iterate all grid coordinates of an object:
+  `for (dr, dc) in obj.shape_pixels: r, c = obj.bbox[0] + dr, obj.bbox[1] + dc`
+"""
+
+
 def build_code_gen_prompt(
     hypothesis: str,
     library_text: str | None = None,
     prefer_whole_grid: bool = False,
 ) -> str:
     if library_text is None:
-        library_text = format_library_for_prompt()
+        library_text = generate_library_schema()
 
     whole = _WHOLE_GRID_RULE if prefer_whole_grid else ""
 
-    return f"""Implement this hypothesized rule as a Python function:
-"{hypothesis}"
+    return f"""Implement as Python. Hypothesis: "{hypothesis}"
 
-Requirements:
-- Function signature: def solve(grid: List[List[int]]) -> List[List[int]]
-- Do NOT use any import statements. All needed helpers are already available in the execution namespace — call them directly by name.
-- Use ONLY these helper primitives if possible:
+Rules:
+- Signature: def solve(grid: List[List[int]]) -> List[List[int]]
+- No imports. Helpers below are already in scope — call by name.
+
 {library_text}
+{_STRICT_SCHEMA_RULE}
 {_COMPOSE_RULE}{whole}{_FEW_SHOT}
-- Do not hardcode specific coordinates or grid dimensions — the rule must generalize
-- Respond with ONLY a single ```python code fence containing the function. No explanation before or after.
+- No hardcoded coords/sizes — must generalize.
+- Output ONLY one ```python fence with the function. Zero explanation.
 """
 
 

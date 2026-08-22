@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 from ..constraints import ConstraintDict, constraints_to_text
-from ..preprocess import describe_train_pairs
+from ..preprocess import describe_train_pairs, should_include_raw
 
 Grid = list  # type alias hint only
 TrainPair = Tuple[list, list]
@@ -25,41 +25,56 @@ def is_preserved_geometry(constraints: ConstraintDict) -> bool:
     )
 
 
+def _hypothesis_slot_instructions(n_hypotheses: int) -> str:
+    """Vary framing across slots so hypotheses diversify without extra LLM calls."""
+    lines = []
+    for i in range(1, n_hypotheses + 1):
+        if i <= max(1, n_hypotheses - 1):
+            lines.append(
+                f"- HYPOTHESIS {i}: Most likely incremental ARC transform that fits."
+            )
+        else:
+            lines.append(
+                f"- HYPOTHESIS {i}: Outside-the-box alternative — do NOT rephrase H1."
+            )
+    return "\n".join(lines)
+
+
 def build_abstraction_prompt(
     train_pairs: Sequence[TrainPair],
     constraints: ConstraintDict,
     n_hypotheses: int = 3,
     connectivity: int = 4,
-    include_raw: bool = True,
+    include_raw: Optional[bool] = None,
 ) -> str:
+    if include_raw is None:
+        include_raw = should_include_raw(train_pairs, connectivity=connectivity)
     examples = describe_train_pairs(
         train_pairs, connectivity=connectivity, include_raw=include_raw  # type: ignore[arg-type]
     )
     constraint_block = constraints_to_text(constraints, hard_only=True)
+    slot_block = _hypothesis_slot_instructions(n_hypotheses)
 
     geometry_bias = ""
     if is_preserved_geometry(constraints):
         geometry_bias = f"""
 IMPORTANT — size, color set, and object count are all preserved:
-- HYPOTHESIS 1 MUST name exactly one whole-grid geometry op from this closed set:
-  {WHOLE_GRID_OPS}
-- Phrase it as transforming the ENTIRE grid (e.g. "The entire grid is rotated 180 degrees."
-  or "The entire grid is mirrored left-right via reflect_horizontal.").
-- Do NOT lead with shift/translate/wrap, per-object rotation, or gravity unless later
-  hypotheses explore those after the named whole-grid options.
+- HYPOTHESIS 1 MUST name exactly one whole-grid op from: {WHOLE_GRID_OPS}
+- Phrase as transforming the ENTIRE grid. No shift/gravity/per-object unless later slots.
 """
 
-    return f"""You are looking at an abstract reasoning puzzle. Here are the example transformations:
+    return f"""Abstract reasoning puzzle. Example transformations:
 
 {examples}
 
-Known constraints these examples satisfy:
+Constraints:
 {constraint_block}
 {geometry_bias}
-Propose {n_hypotheses} DIFFERENT possible hypotheses for the transformation rule, in plain English.
-Be genuinely different from each other — don't just rephrase the same idea.
-Format each as:
-HYPOTHESIS N: <one or two sentence description>
+Propose {n_hypotheses} DIFFERENT hypotheses (plain English, one sentence each).
+{slot_block}
+Format exactly:
+HYPOTHESIS N: <description>
+No preamble. No commentary after the list.
 """
 
 

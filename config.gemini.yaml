@@ -1,0 +1,21 @@
+# Local Gemini API diagnostic / dry-run (not for Kaggle scoring).
+backend: "api"
+model_name: "gemini-flash-lite-latest"
+n_abstractions_per_puzzle: 2
+max_self_debug_retries: 2
+n_judges: 2
+total_time_budget_hours: 1
+data_dir: "./data/arc-agi-2"
+early_stop_after_cycles: 2
+sandbox_timeout_seconds: 5
+connectivity: 4
+triage_enabled: true
+max_effort: 4
+partial_escalate_threshold: 0.5
+close_escalate_threshold: 0.8
+hyp_dedupe_threshold: 0.45
+
+api:
+  provider: "gemini"
+  base_url: "https://generativelanguage.googleapis.com"
+  api_key_env: "GEMINI_API_KEY"

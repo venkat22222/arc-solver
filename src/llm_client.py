@@ -22,6 +22,27 @@ def load_config(path: str | Path | None = None) -> dict:
         return yaml.safe_load(f)
 
 
+def _load_dotenv() -> None:
+    """Load repo-root .env into os.environ if present (does not override existing)."""
+    import os
+
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+# Process-wide guard: kaggle_local must load exactly once per run (Topic H).
+_KAGGLE_INIT_COUNT = 0
+
+
 class LLMClient:
     def __init__(self, backend: str, model_name: str, **kwargs: Any):
         if backend not in ("api", "ollama", "kaggle_local", "mock"):
@@ -32,6 +53,7 @@ class LLMClient:
         self._hf_model = None
         self._hf_tokenizer = None
         self._mock_call = 0
+        self._kaggle_loaded = False
 
         if backend == "kaggle_local" and not kwargs.get("lazy_load", False):
             self._init_kaggle_local()
@@ -50,7 +72,10 @@ class LLMClient:
         return cls(backend=backend, model_name=model_name, **extra)
 
     def _init_kaggle_local(self) -> None:
-        """Load HF CausalLM, optionally 4-bit via bitsandbytes."""
+        """Load HF CausalLM once; reuse across all puzzles (Topic H)."""
+        global _KAGGLE_INIT_COUNT
+        if self._hf_model is not None and self._hf_tokenizer is not None:
+            return
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -58,6 +83,13 @@ class LLMClient:
             raise ImportError(
                 "kaggle_local backend requires transformers, torch, bitsandbytes, accelerate"
             ) from e
+
+        _KAGGLE_INIT_COUNT += 1
+        if _KAGGLE_INIT_COUNT > 1:
+            print(
+                "[kaggle_local] WARNING: model init called more than once in this process. "
+                "Reuse one LLMClient for the full run — reloading wastes the 12h budget."
+            )
 
         load_in_4bit = bool(self.kwargs.get("load_in_4bit", True))
         device_map = self.kwargs.get("device_map", "auto")
@@ -126,7 +158,8 @@ class LLMClient:
         )
         self._hf_model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
         self._hf_model.eval()
-        print("[kaggle_local] model ready")
+        self._kaggle_loaded = True
+        print(f"[kaggle_local] model ready (init_count={_KAGGLE_INIT_COUNT})")
 
     def generate(self, prompt: str, max_tokens: int = 1024, temperature: float = 0.7) -> str:
         if self.backend == "ollama":
@@ -154,11 +187,11 @@ class LLMClient:
         if "fix the code" in lower or "failure report" in lower:
             return f"```python\n{code}\n```\n"
 
-        if "implement this hypothesized rule" in lower:
+        if "implement this hypothesized rule" in lower or "implement as python" in lower:
             import re
 
             quoted = re.search(
-                r'Implement this hypothesized rule as a Python function:\s*"([^"]+)"',
+                r'(?:Implement this hypothesized rule as a Python function|Implement as Python\. Hypothesis):\s*"([^"]+)"',
                 prompt,
                 re.I,
             )
@@ -324,6 +357,7 @@ class LLMClient:
         import urllib.error
         import urllib.request
 
+        _load_dotenv()
         key_env = self.kwargs.get("api_key_env", "OPENAI_API_KEY")
         api_key = os.environ.get(key_env, "") or self.kwargs.get("api_key", "")
         if not api_key:

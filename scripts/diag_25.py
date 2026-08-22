@@ -19,19 +19,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.brute_force import try_brute_force
 from src.constraints import extract_constraints
-from src.hypothesis_filter import filter_hypotheses
 from src.llm_client import LLMClient
 from src.loader import load_puzzle
-from src.prompts.abstraction_prompt import (
-    build_abstraction_prompt,
-    is_preserved_geometry,
-    parse_hypotheses,
-)
-from src.prompts.code_gen_prompt import build_code_gen_prompt, extract_code
-from src.sandbox import safe_execute
-from src.self_debug import self_debug_loop
+from src.pipeline import solve_puzzle_detailed
+from src.triage import triage_puzzle
 
 # ---------------------------------------------------------------------------
 # Tiered puzzle set (25)
@@ -80,6 +72,9 @@ class RetryingClient:
         self.n_calls = 0
         self.n_retries = 0
 
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
     def generate(self, prompt: str, max_tokens: int = 1024, temperature: float = 0.7) -> str:
         wait = self.min_interval_s - (time.time() - self._last)
         if wait > 0:
@@ -118,22 +113,16 @@ def categorize_miss(report: dict, meta: dict) -> str | None:
         return "a_wrong_hypothesis"
 
     attempts = report.get("stages", {}).get("code_attempts") or []
-    any_clean_wrong = False
-    any_exec_success = False
-    for a in attempts:
-        for tr in a.get("train_results") or []:
-            if tr.get("success"):
-                any_exec_success = True
-                if not tr.get("match"):
-                    any_clean_wrong = True
+    any_clean_wrong = any(
+        (a.get("mean_partial_credit") or 0) > 0 and not a.get("verified") for a in attempts
+    )
 
     hyps = report.get("stages", {}).get("hypotheses") or []
     related = _hyp_looks_related(hyps, meta.get("keywords") or [])
 
-    # (b) hyp mentions relevant concepts OR code ran cleanly but wrong
     if related or any_clean_wrong:
         return "b_hyp_okish_code_wrong"
-    if any_exec_success:
+    if attempts:
         return "b_hyp_okish_code_wrong"
     return "a_wrong_hypothesis"
 
@@ -143,12 +132,19 @@ def diagnose_one(meta: dict, client: RetryingClient, budget: float, n_hyp: int, 
     path = ROOT / "data" / "arc-agi-2" / "training" / f"{puzzle_id}.json"
     puzzle = load_puzzle(path)
     t0 = time.time()
+    triage = triage_puzzle(puzzle)
     report: dict[str, Any] = {
         "id": puzzle_id,
         "tier": meta["tier"],
         "note": meta["note"],
         "n_train": puzzle.n_train,
-        "stages": {},
+        "stages": {
+            "triage": {
+                "bucket": triage.bucket,
+                "hardness": round(triage.hardness, 3),
+                "note": triage.note,
+            }
+        },
         "failure_point": None,
         "hit": False,
         "any_train_pass": False,
@@ -159,158 +155,68 @@ def diagnose_one(meta: dict, client: RetryingClient, budget: float, n_hyp: int, 
     cons = extract_constraints(puzzle.train_pairs)
     report["stages"]["constraints"] = cons
 
-    # Pre-pipeline brute-force: skip LLM if a library primitive / simple pair fits.
-    bf = try_brute_force(puzzle.train_pairs)
-    if bf is not None:
-        report["stages"]["brute_force"] = {"hit": True, "name": bf.name, "n_ops": bf.n_ops}
-        report["stages"]["hypotheses"] = [f"[brute_force] {bf.name}"]
-        report["any_verified"] = True
-        report["any_train_pass"] = True
-        r = safe_execute(bf.code, puzzle.test_inputs[0], timeout_seconds=5)
-        expected = puzzle.test_outputs[0] if puzzle.test_outputs else None
-        report["stages"]["test_exec_success"] = r.success
-        report["stages"]["test_match"] = bool(
-            expected is not None and r.output_grid == expected
-        )
-        report["hit"] = report["stages"]["test_match"]
-        report["stages"]["code_attempts"] = [
-            {
-                "hyp_index": -1,
-                "hypothesis": f"[brute_force] {bf.name}",
-                "code_preview": bf.code[:350],
-                "verified": True,
-                "n_train_match": puzzle.n_train,
-            }
-        ]
-        if not report["hit"]:
-            report["failure_point"] = "3_verified_on_train_but_wrong_on_test"
-            report["miss_category"] = "b_hyp_okish_code_wrong"
-        report["elapsed_s"] = round(time.time() - t0, 2)
-        return report
-
-    report["stages"]["brute_force"] = {"hit": False}
-    prefer_whole_grid = is_preserved_geometry(cons)
-
     try:
-        prompt = build_abstraction_prompt(puzzle.train_pairs, cons, n_hypotheses=n_hyp)
-        raw = client.generate(prompt, max_tokens=512, temperature=0.7)
-        hyps = parse_hypotheses(raw)
-        hyps, rejected = filter_hypotheses(hyps, cons)
-        report["stages"]["abstraction_raw_preview"] = raw[:500]
-        report["stages"]["hypotheses"] = hyps
-        report["stages"]["rejected_hypotheses"] = [{"text": h[:160], "reason": r} for h, r in rejected]
-        if not hyps:
-            report["failure_point"] = "1a_parse_hypotheses_empty"
-            report["miss_category"] = categorize_miss(report, meta)
-            report["elapsed_s"] = round(time.time() - t0, 2)
-            return report
+        detail = solve_puzzle_detailed(
+            puzzle,
+            client,  # type: ignore[arg-type]
+            time_budget_seconds=budget,
+            n_abstractions=n_hyp,
+            max_self_debug_retries=retries,
+            n_judges=2,
+            early_stop_after_cycles=2,
+            sandbox_timeout=5.0,
+            max_effort=4,
+        )
     except Exception as e:
-        report["failure_point"] = f"1a_llm_error: {e}"
+        report["failure_point"] = f"pipeline_error: {e}"
         report["traceback"] = traceback.format_exc()[-600:]
         report["miss_category"] = "a_wrong_hypothesis"
         report["elapsed_s"] = round(time.time() - t0, 2)
         return report
 
-    code_attempts = []
-    verified_codes = []
+    report["stages"]["effort_tier"] = detail.tier_reached
+    report["stages"]["include_raw"] = detail.include_raw
+    report["stages"]["n_hyp_deduped"] = detail.n_hyp_deduped
+    report["stages"]["hypotheses"] = detail.hypotheses
+    report["stages"]["code_attempts"] = detail.code_attempts
+    report["stages"]["best_mean_partial"] = detail.best_mean_partial
+    report["any_verified"] = detail.any_verified
+    report["any_train_pass"] = detail.any_train_pass
+    report["early_stopped"] = detail.early_stopped
 
-    for i, hyp in enumerate(hyps[:n_hyp]):
-        if time.time() - t0 > budget:
-            report["failure_point"] = report["failure_point"] or "time_budget"
-            break
-        attempt: dict[str, Any] = {
-            "hyp_index": i,
-            "hypothesis": hyp,
-            "train_results": [],
-            "verified": False,
+    if detail.brute_force_name:
+        report["stages"]["brute_force"] = {
+            "hit": True,
+            "name": detail.brute_force_name,
         }
-        try:
-            code_raw = client.generate(
-                build_code_gen_prompt(hyp, prefer_whole_grid=prefer_whole_grid),
-                max_tokens=512,
-                temperature=0.2,
-            )
-            code = extract_code(code_raw)
-            attempt["code_preview"] = code[:350]
-        except Exception as e:
-            attempt["error"] = f"codegen: {e}"
-            code_attempts.append(attempt)
-            continue
+    else:
+        report["stages"]["brute_force"] = {"hit": False}
 
-        train_ok = 0
-        for ti, (inp, expected) in enumerate(puzzle.train_pairs):
-            r = safe_execute(code, inp, timeout_seconds=5)
-            entry = {
-                "train_i": ti,
-                "success": r.success,
-                "match": bool(r.success and r.output_grid == expected),
-                "error": r.error_message,
-            }
-            attempt["train_results"].append(entry)
-            if entry["match"]:
-                train_ok += 1
-                report["any_train_pass"] = True
-        attempt["n_train_match"] = train_ok
+    expected = puzzle.test_outputs[0] if puzzle.test_outputs else None
+    pred = detail.outputs[0] if detail.outputs else None
+    report["stages"]["test_match"] = bool(expected is not None and pred == expected)
+    report["hit"] = report["stages"]["test_match"]
 
-        if train_ok == len(puzzle.train_pairs):
-            attempt["verified"] = True
-            verified_codes.append(code)
-            report["any_verified"] = True
-        else:
-            try:
-                fixed = self_debug_loop(
-                    client, code, puzzle.train_pairs, max_retries=retries, timeout_seconds=5
-                )
-                attempt["self_debug_ok"] = fixed is not None
-                if fixed:
-                    verified_codes.append(fixed)
-                    report["any_verified"] = True
-                    attempt["verified"] = True
-                    train_ok = 0
-                    for inp, expected in puzzle.train_pairs:
-                        r = safe_execute(fixed, inp, timeout_seconds=5)
-                        if r.success and r.output_grid == expected:
-                            train_ok += 1
-                            report["any_train_pass"] = True
-                    attempt["n_train_match_after_debug"] = train_ok
-            except Exception as e:
-                attempt["self_debug_error"] = str(e)
-
-        code_attempts.append(attempt)
-
-    report["stages"]["code_attempts"] = [
-        {k: v for k, v in a.items() if k != "code"} for a in code_attempts
-    ]
-
-    if not verified_codes:
-        if report["any_train_pass"]:
-            report["failure_point"] = "2_partial_train_only_never_fully_verified"
-        elif any(a.get("code_preview") for a in code_attempts):
-            errs = []
-            for a in code_attempts:
-                for tr in a.get("train_results", []):
-                    if tr.get("error"):
-                        errs.append(tr["error"].split(":")[0])
-            from collections import Counter
-
-            report["dominant_exec_errors"] = Counter(errs).most_common(5)
-            report["failure_point"] = "2_codegen_or_exec_never_matches_train"
-        else:
-            report["failure_point"] = "1b_no_code_extracted"
-        report["miss_category"] = categorize_miss(report, meta)
+    if report["hit"]:
         report["elapsed_s"] = round(time.time() - t0, 2)
         return report
 
-    code = verified_codes[0]
-    r = safe_execute(code, puzzle.test_inputs[0], timeout_seconds=5)
-    expected = puzzle.test_outputs[0] if puzzle.test_outputs else None
-    report["stages"]["test_exec_success"] = r.success
-    report["stages"]["test_match"] = bool(expected is not None and r.output_grid == expected)
-    report["hit"] = report["stages"]["test_match"]
-    if not report["hit"]:
+    if detail.brute_force_name:
         report["failure_point"] = "3_verified_on_train_but_wrong_on_test"
-        # rare: train OK test fail — treat as (b)
         report["miss_category"] = "b_hyp_okish_code_wrong"
+    elif detail.any_verified:
+        report["failure_point"] = "3_verified_on_train_but_wrong_on_test"
+        report["miss_category"] = "b_hyp_okish_code_wrong"
+    elif detail.any_train_pass:
+        report["failure_point"] = "2_partial_train_only_never_fully_verified"
+        report["miss_category"] = "c_partial_train"
+    elif detail.hypotheses:
+        report["failure_point"] = "2_codegen_or_exec_never_matches_train"
+        report["miss_category"] = categorize_miss(report, meta)
+    else:
+        report["failure_point"] = "1a_parse_hypotheses_empty"
+        report["miss_category"] = "a_wrong_hypothesis"
+
     report["elapsed_s"] = round(time.time() - t0, 2)
     return report
 
@@ -345,12 +251,36 @@ def summarize(results: list[dict]) -> dict:
         1 for r in results if ((r.get("stages") or {}).get("brute_force") or {}).get("hit")
     )
     overall_cats = {"a_wrong_hypothesis": 0, "b_hyp_okish_code_wrong": 0, "c_partial_train": 0}
+    close_misses = []
+    effort_hist: dict[int, int] = {}
+    triage_hist: dict[str, int] = {}
     for r in results:
+        et = (r.get("stages") or {}).get("effort_tier")
+        if et is not None:
+            effort_hist[int(et)] = effort_hist.get(int(et), 0) + 1
+        tb = ((r.get("stages") or {}).get("triage") or {}).get("bucket")
+        if tb:
+            triage_hist[tb] = triage_hist.get(tb, 0) + 1
         if r.get("hit"):
             continue
         c = r.get("miss_category")
         if c in overall_cats:
             overall_cats[c] += 1
+        best_pc = (r.get("stages") or {}).get("best_mean_partial") or 0.0
+        attempts = (r.get("stages") or {}).get("code_attempts") or []
+        if attempts and not best_pc:
+            best_pc = max((a.get("mean_partial_credit") or 0.0) for a in attempts)
+        close_misses.append(
+            {
+                "id": r["id"],
+                "tier": r.get("tier"),
+                "miss_category": c,
+                "best_mean_partial_credit": best_pc,
+                "effort_tier": et,
+                "hypotheses": ((r.get("stages") or {}).get("hypotheses") or [])[:3],
+            }
+        )
+    close_misses.sort(key=lambda x: -x["best_mean_partial_credit"])
 
     return {
         "n": len(results),
@@ -360,6 +290,9 @@ def summarize(results: list[dict]) -> dict:
         "verified_rate": f"{overall_verified}/{len(results)}",
         "brute_force_solves": brute_force_hits,
         "miss_categories_overall": overall_cats,
+        "effort_tier_histogram": effort_hist,
+        "triage_histogram": triage_hist,
+        "close_misses_by_partial_credit": close_misses[:15],
         "by_tier": by_tier,
         "per_puzzle": [
             {
@@ -371,6 +304,8 @@ def summarize(results: list[dict]) -> dict:
                 "partial": r.get("any_train_pass"),
                 "brute_force": ((r.get("stages") or {}).get("brute_force") or {}).get("hit"),
                 "brute_force_name": ((r.get("stages") or {}).get("brute_force") or {}).get("name"),
+                "effort_tier": ((r.get("stages") or {}).get("effort_tier")),
+                "triage_bucket": ((r.get("stages") or {}).get("triage") or {}).get("bucket"),
                 "miss_category": r.get("miss_category"),
                 "elapsed_s": r.get("elapsed_s"),
                 "hyp_preview": ((r.get("stages") or {}).get("hypotheses") or [""])[0][:120],
@@ -383,20 +318,21 @@ def summarize(results: list[dict]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="gemini-flash-lite-latest")
+    ap.add_argument("--backend", default="api")
     ap.add_argument("--api-key-env", default="GEMINI_API_KEY")
     ap.add_argument("--budget", type=float, default=180)
     ap.add_argument("--n-hyp", type=int, default=2)
     ap.add_argument("--retries", type=int, default=2)
     ap.add_argument("--min-interval", type=float, default=13.0, help="seconds between API calls")
-    ap.add_argument("--out", default="diag_25_results.json")
+    ap.add_argument("--out", default="diag_25_results_alloc.json")
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--limit", type=int, default=25)
     args = ap.parse_args()
 
     inner = LLMClient(
-        backend="api",
+        backend=args.backend,
         model_name=args.model,
-        provider="gemini",
+        provider="gemini" if args.backend == "api" else None,
         api_key_env=args.api_key_env,
     )
     # smoke
@@ -422,7 +358,8 @@ def main() -> None:
                     "verified": r["any_verified"],
                     "partial": r["any_train_pass"],
                     "brute_force": ((r.get("stages") or {}).get("brute_force") or {}).get("hit"),
-                    "brute_force_name": ((r.get("stages") or {}).get("brute_force") or {}).get("name"),
+                    "effort_tier": ((r.get("stages") or {}).get("effort_tier")),
+                    "triage": ((r.get("stages") or {}).get("triage") or {}).get("bucket"),
                     "miss_category": r["miss_category"],
                     "elapsed_s": r.get("elapsed_s"),
                     "hyp": ((r.get("stages") or {}).get("hypotheses") or [""])[0][:100],

@@ -122,8 +122,9 @@ def diagnose_one(puzzle_id: str, client: LLMClient, budget: float, n_hyp: int, r
         else:
             # Self-debug
             try:
-                fixed = self_debug_loop(client, code, puzzle.train_pairs, max_retries=retries, timeout_seconds=5)
+                fixed, dbg_stats = self_debug_loop(client, code, puzzle.train_pairs, max_retries=retries, timeout_seconds=5)
                 attempt["self_debug_ok"] = fixed is not None
+                attempt["self_debug_noop"] = dbg_stats.noop_attempts
                 if fixed:
                     verified_codes.append(fixed)
                     report["any_verified"] = True
