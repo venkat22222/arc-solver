@@ -6,7 +6,7 @@ string so the LLM path can be skipped entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from .library import (
@@ -34,6 +34,11 @@ class BruteForceHit:
     name: str
     code: str
     n_ops: int
+    stage: int = 0
+    candidate_name: str = ""
+    simplicity_score: float = 0.0
+    params: dict = field(default_factory=dict)
+    warnings: list = field(default_factory=list)
 
 
 def _identity(grid: Grid) -> Grid:
@@ -122,124 +127,80 @@ def try_brute_force(train_pairs: Sequence[TrainPair]) -> Optional[BruteForceHit]
     if not train_pairs:
         return None
 
-    # --- 1) Single unary primitives (+ identity) ---
+    # STAGE 0: Unary transforms & simple pairs (conservative grouping)
     unaries = _unary_candidates()
     for name, fn, expr in unaries:
         if _matches_all(fn, train_pairs):
-            return BruteForceHit(name=name, code=_code_return(expr), n_ops=1)
+            return BruteForceHit(name=name, code=_code_return(expr), n_ops=1, stage=0, candidate_name=name)
 
-    # --- 2) Parametric singles ---
+    # (moved simple pairs to Stage 0 per instructions "put in Stage 0 for now rather than guessing")
+    for name_f, fn_f, expr_f in unaries:
+        if name_f == "identity": continue
+        for name_g, fn_g, expr_g in unaries:
+            if name_g == "identity" or name_f == name_g: continue
+            composed: Transform = lambda g, a=fn_f, b=fn_g: b(a(g))
+            if _matches_all(composed, train_pairs):
+                inner = expr_f
+                outer = expr_g.replace("(grid)", f"({inner})", 1)
+                name = f"{name_g}_of_{name_f}"
+                return BruteForceHit(name=name, code=_code_return(outer), n_ops=2, stage=0, candidate_name=name)
+
+    # STAGE 1: Stub (Empty)
+    # We will add composition logic in the next step deliberately
+    pass
+
+    # STAGE 2: Parameter-sweep-style candidates
     for direction in ("up", "down", "left", "right"):
         fn = lambda g, d=direction: gravity_drop(g, d)  # noqa: E731
         if _matches_all(fn, train_pairs):
-            return BruteForceHit(
-                name=f"gravity_drop_{direction}",
-                code=_code_return(f'gravity_drop(grid, "{direction}")'),
-                n_ops=1,
-            )
+            name = f"gravity_drop_{direction}"
+            return BruteForceHit(name=name, code=_code_return(f'gravity_drop(grid, "{direction}")'), n_ops=1, stage=2, candidate_name="gravity_drop")
 
     for nr, nc in _infer_tile_factors(train_pairs):
         fn = lambda g, a=nr, b=nc: tile_grid(g, a, b)  # noqa: E731
         if _matches_all(fn, train_pairs):
-            return BruteForceHit(
-                name=f"tile_grid_{nr}x{nc}",
-                code=_code_return(f"tile_grid(grid, {nr}, {nc})"),
-                n_ops=1,
-            )
+            name = f"tile_grid_{nr}x{nc}"
+            return BruteForceHit(name=name, code=_code_return(f"tile_grid(grid, {nr}, {nc})"), n_ops=1, stage=2, candidate_name="tile_grid")
 
     colors = _colors_in_pairs(train_pairs)
     for src in colors:
         for dst in colors:
-            if src == dst:
-                continue
+            if src == dst: continue
             fn = lambda g, a=src, b=dst: recolor(g, a, b)  # noqa: E731
             if _matches_all(fn, train_pairs):
-                return BruteForceHit(
-                    name=f"recolor_{src}_to_{dst}",
-                    code=_code_return(f"recolor(grid, {src}, {dst})"),
-                    n_ops=1,
-                )
+                name = f"recolor_{src}_to_{dst}"
+                return BruteForceHit(name=name, code=_code_return(f"recolor(grid, {src}, {dst})"), n_ops=1, stage=2, candidate_name="recolor")
 
     for fill in colors:
         fn = lambda g, c=fill: fill_enclosed_regions(g, c)  # noqa: E731
         if _matches_all(fn, train_pairs):
-            return BruteForceHit(
-                name=f"fill_enclosed_{fill}",
-                code=_code_return(f"fill_enclosed_regions(grid, {fill})"),
-                n_ops=1,
-            )
+            name = f"fill_enclosed_{fill}"
+            return BruteForceHit(name=name, code=_code_return(f"fill_enclosed_regions(grid, {fill})"), n_ops=1, stage=2, candidate_name="fill_enclosed")
 
-    # --- 3) Simple pairs of unaries: g(f(grid)) ---
-    for name_f, fn_f, expr_f in unaries:
-        if name_f == "identity":
-            continue
-        for name_g, fn_g, expr_g in unaries:
-            if name_g == "identity":
-                continue
-            if name_f == name_g:
-                continue
-            composed: Transform = lambda g, a=fn_f, b=fn_g: b(a(g))
-            if _matches_all(composed, train_pairs):
-                # expr_g is like "rotate_90(grid)" — nest expr_f inside
-                inner = expr_f  # e.g. rotate_90(grid)
-                # replace the outermost grid arg of expr_g with inner
-                outer = expr_g.replace("(grid)", f"({inner})", 1)
-                return BruteForceHit(
-                    name=f"{name_g}_of_{name_f}",
-                    code=_code_return(outer),
-                    n_ops=2,
-                )
-
-    # --- 4) Simple tiling + reflection pairs (common ARC, uses primitives) ---
-    # Named multi-line / compound patterns first (still "simple pairs" of mirrors+concat)
+    # STAGE 3: Complex / tiling candidates
     if _matches_all(_mirror_tile_2x2, train_pairs):
-        return BruteForceHit(name="mirror_tile_2x2", code=_code_mirror_tile_2x2(), n_ops=2)
+        return BruteForceHit(name="mirror_tile_2x2", code=_code_mirror_tile_2x2(), n_ops=2, stage=3, candidate_name="mirror_tile_2x2")
 
     specials: List[Tuple[str, Transform, str]] = [
-        (
-            "hstack_reflect_horizontal",
-            _hstack_reflect_h,
-            "[row + row[::-1] for row in grid]",
-        ),
-        (
-            "vstack_reflect_vertical",
-            _vstack_reflect_v,
-            "grid + grid[::-1]",
-        ),
-        (
-            "tile_after_reflect_horizontal_2x2",
-            lambda g: tile_grid(reflect_horizontal(g), 2, 2),
-            "tile_grid(reflect_horizontal(grid), 2, 2)",
-        ),
-        (
-            "tile_after_reflect_vertical_2x2",
-            lambda g: tile_grid(reflect_vertical(g), 2, 2),
-            "tile_grid(reflect_vertical(grid), 2, 2)",
-        ),
-        (
-            "tile_after_rotate_180_2x2",
-            lambda g: tile_grid(rotate_180(g), 2, 2),
-            "tile_grid(rotate_180(grid), 2, 2)",
-        ),
+        ("hstack_reflect_horizontal", _hstack_reflect_h, "[row + row[::-1] for row in grid]"),
+        ("vstack_reflect_vertical", _vstack_reflect_v, "grid + grid[::-1]"),
+        ("tile_after_reflect_horizontal_2x2", lambda g: tile_grid(reflect_horizontal(g), 2, 2), "tile_grid(reflect_horizontal(grid), 2, 2)"),
+        ("tile_after_reflect_vertical_2x2", lambda g: tile_grid(reflect_vertical(g), 2, 2), "tile_grid(reflect_vertical(grid), 2, 2)"),
+        ("tile_after_rotate_180_2x2", lambda g: tile_grid(rotate_180(g), 2, 2), "tile_grid(rotate_180(grid), 2, 2)"),
     ]
     for name, fn, expr in specials:
         if _matches_all(fn, train_pairs):
-            return BruteForceHit(name=name, code=_code_return(expr), n_ops=2)
+            return BruteForceHit(name=name, code=_code_return(expr), n_ops=2, stage=3, candidate_name=name)
 
-    # tile(f(grid)) for remaining unaries × inferred factors
+    # tile(f(grid)) for remaining unaries
     for name_f, fn_f, expr_f in unaries:
-        if name_f == "identity":
-            continue
+        if name_f == "identity": continue
         for nr, nc in _infer_tile_factors(train_pairs):
             composed = lambda g, a=fn_f, x=nr, y=nc: tile_grid(a(g), x, y)
             if _matches_all(composed, train_pairs):
-                return BruteForceHit(
-                    name=f"tile_{nr}x{nc}_of_{name_f}",
-                    code=_code_return(f"tile_grid({expr_f}, {nr}, {nc})"),
-                    n_ops=2,
-                )
+                name = f"tile_{nr}x{nc}_of_{name_f}"
+                return BruteForceHit(name=name, code=_code_return(f"tile_grid({expr_f}, {nr}, {nc})"), n_ops=2, stage=3, candidate_name="tile_unaries")
 
     return None
-
 
 __all__ = ["BruteForceHit", "try_brute_force"]
