@@ -144,7 +144,7 @@ def solve_puzzle(
             if partial:
                 state.any_partial_train_pass = True
 
-            verified = self_debug_loop(
+            verified, _stats = self_debug_loop(
                 llm_client,
                 code,
                 puzzle.train_pairs,

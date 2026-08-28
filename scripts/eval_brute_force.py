@@ -38,6 +38,7 @@ def run_eval():
 
     results = []
     total_time_ms = 0.0
+    max_time_ms = 0.0
     solved_count = 0
     false_positives = 0
     solves_by_stage = Counter()
@@ -52,6 +53,7 @@ def run_eval():
         hit = try_brute_force(puzzle.train_pairs)
         elapsed_ms = (time.time() - start_time) * 1000.0
         total_time_ms += elapsed_ms
+        max_time_ms = max(max_time_ms, elapsed_ms)
 
         solved = hit is not None
         candidate_name = hit.name if solved else None
@@ -146,6 +148,7 @@ def run_eval():
     print(f"Solved by Brute-force:         {solved_count}")
     print(f"False Positives:               {false_positives}")
     print(f"Average Brute-force Time (ms): {total_time_ms / len(puzzles) if puzzles else 0.0:.2f}")
+    print(f"Max Brute-force Time (ms):     {max_time_ms:.2f}")
     print(f"Average Simplicity Score:      {total_simplicity_score / solved_count if solved_count else 0.0:.2f}")
     print("\nSolves by Stage:")
     for stage_id in sorted(solves_by_stage.keys()):
