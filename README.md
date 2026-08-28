@@ -1,120 +1,168 @@
-# ARC-AGI-2 Solver
+# 🧩 ARC-AGI-2 Puzzle Solver
 
-LLM-driven generate–execute–verify pipeline for ARC-AGI-2 puzzles. **No fine-tuning** — prompting + orchestration only, with a config-swappable model backend for local (Ollama / API) and Kaggle (in-process HF model).
+An end-to-end, graduated-effort autonomous solver for the **ARC-AGI-2 (Abstraction and Reasoning Corpus)** challenge. Built for high-efficiency competitive execution under strict resource constraints (e.g. Kaggle 9-hour offline GPU limit).
 
-## Setup
+---
+
+## 🌟 Key Features
+
+* **Graduated Effort Ladder**: Fast deterministic rules (0ms–200ms) resolve simple puzzles instantly before escalating to LLMs.
+* **4-Stage Brute-Force Rule Synthesizer**: Tests single unaries, cross-primitive compositions (`recolor + crop`, `gravity + geometric`), parameter sweeps, and symmetry stacks. Solves **27 / 1000** training puzzles in ~181ms with **0% false positives**.
+* **Pre-LLM Triage & Hopeless Hard-Gate**: Evaluates structural hardness (0.0 to 1.0) without an LLM to immediately gate out unsolvable puzzles, saving budget for solvable tasks.
+* **Safe Isolated Sandbox Pool**: Persistent multiprocessing worker pool with AST safety checks, zero process-spawn overhead, and graduated timeout tiers (5s $\to$ 8s $\to$ 10s).
+* **Multi-Turn Visual Self-Debug**: Automatic diff extraction comparing actual vs expected outputs, feeding errors back to the model with targeted debugging guidance.
+* **Minimum Description Length (MDL) Selection**: Chooses simpler, more generalized code when multiple candidate programs pass all demonstration pairs.
+* **Swappable LLM Backends**:
+  * `kaggle_local`: In-process 4-bit NF4 quantized HuggingFace models (e.g. `Qwen/Qwen3-8B`) for offline GPU scoring.
+  * `ollama`: Local Ollama server (`qwen2.5:7b`) for offline development on laptop/CPU.
+  * `api`: Cloud API mode (`gemini-flash-lite-latest`) for fast benchmarking.
+
+---
+
+## 🏗️ Architecture & Pipeline Flow
+
+```mermaid
+flowchart TD
+    A["Raw Puzzle (JSON)"] --> B["Stage 0-3 Brute Force"]
+    B -- "Exact Match Found" --> S["Submit Solution (0 LLM Calls)"]
+    B -- "No Match" --> C["Triage & Hardness Scoring"]
+    C -- "Hopeless Bucket (Gate)" --> FB["Fallback (Identity Grid)"]
+    C -- "Tractable / Hard" --> D["Perception & Feature Extraction"]
+    D --> E["Hypothesis Generation & Deduplication"]
+    E --> F["LLM Code-Gen (DSL + Python)"]
+    F --> G["Sandbox Execution & Verification"]
+    G -- "Fails Train Pairs" --> H["Self-Debug Feedback Loop"]
+    H --> F
+    G -- "Passes Train Pairs" --> J["MDL / Candidate Ranking"]
+    J --> S
+```
+
+---
+
+## 📁 Repository Structure
+
+```text
+arc-solver/
+├── src/
+│   ├── brute_force.py      # Instant 4-stage deterministic solver (Stages 0-3)
+│   ├── constraints.py      # Extracts size/color/object constancy invariants
+│   ├── early_stop.py        # Early termination when perfect verification is reached
+│   ├── hypothesis_dedup.py # Semantic deduplication of natural language ideas
+│   ├── hypothesis_filter.py# Rejects geometrically implausible hypotheses
+│   ├── judge.py            # Holistic program ranking & candidate selection
+│   ├── library.py          # Domain-specific primitives (rotations, flood fill, etc.)
+│   ├── llm_client.py       # Unified LLM client (Kaggle HF / Ollama / Gemini / Mock)
+│   ├── loader.py           # Loads ARC puzzle JSONs into structured dataclasses
+│   ├── pipeline.py         # Main orchestrator linking all stages
+│   ├── preprocess.py       # Object segmentation & connected components
+│   ├── routing.py          # Escalation logic between local and fallback backends
+│   ├── sandbox.py          # Safe worker pool with graduated timeout tiers (5s/8s/10s)
+│   ├── self_debug.py       # Visual diff feedback loop for error correction
+│   ├── submission.py       # Formats test output predictions
+│   ├── tiebreak.py         # MDL code complexity scoring
+│   ├── triage.py           # Pre-LLM structural hardness scoring (0.0 to 1.0)
+│   └── prompts/            # System & user prompt templates
+│
+├── notebooks/
+│   ├── kaggle_dry_run.ipynb    # 20-puzzle GPU benchmark & budget measurement
+│   └── kaggle_submission.ipynb # Official 1000-puzzle Kaggle submission notebook
+│
+├── scripts/
+│   ├── eval_brute_force.py # Benchmarks brute-force engine across 1000 puzzles
+│   ├── build_submission.py # Bundles outputs into competition submission.json
+│   ├── diag_25.py          # 25-puzzle diagnostic suite across easy/medium/hard
+│   └── run_e2e.py          # End-to-end solver for individual puzzles
+│
+├── tests/
+│   ├── test_easy_puzzles.py          # Core unit test suite (10/10 passing)
+│   └── test_brute_force_refactored.py# Brute-force execution tests
+│
+├── config.yaml             # Local development settings (Ollama / CPU)
+├── config.gemini.yaml      # Cloud API benchmark settings
+├── config.kaggle.yaml      # Kaggle offline GPU settings (Qwen3-8B 4-bit NF4)
+└── requirements.txt        # Python package dependencies
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/venki-byte/arc-solver.git
 cd arc-solver
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### CUDA + kaggle_local (Qwen3-8B 4-bit)
-
-`kaggle_local` needs a **CUDA** build of PyTorch (the default `pip install torch` CPU wheel will not work with bitsandbytes):
-
+*(Optional for GPU acceleration)*:
 ```bash
-# Example — pick the CUDA index that matches your driver (cu124 is a common choice)
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-Smoke-test load + generate (CUDA torch required). On a **4GB** laptop use Qwen3-4B; target **Qwen3-8B** on Kaggle P100:
+---
+
+### 2. Running Unit Tests
+
+Run the test suite to verify pipeline components:
 
 ```bash
-python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-4B --max-tokens 32
-# Kaggle / 16GB GPU:
-# python -m scripts.smoke_kaggle_local --model Qwen/Qwen3-8B --max-tokens 32
+pytest tests/test_easy_puzzles.py -v
 ```
 
-Kaggle target config: `config.kaggle.yaml`. Notebook: `notebooks/kaggle_submission.ipynb`. Setup notes: `docs/KAGGLE_SETUP.md`.
+---
 
-For local smoke tests with Ollama:
+### 3. Evaluating the Brute-Force Engine
+
+Benchmark the fast deterministic solver on the 1000 ARC training puzzles:
 
 ```bash
-ollama pull qwen2.5:1.5b
-# ensure ollama serve is running on localhost:11434
+python scripts/eval_brute_force.py --data-dir data/arc-agi-2/training
 ```
 
-Edit `config.yaml` to switch backends:
-
-```yaml
-backend: "ollama"          # laptop dev
-# backend: "api"           # hosted API (dev only)
-# backend: "kaggle_local"  # in-process HF 4-bit (see config.kaggle.yaml)
+Output:
+```text
+========================================
+BRUTE-FORCE EVALUATION SUMMARY
+========================================
+Total Puzzles Checked:         1000
+Solved by Brute-force:         27
+False Positives:               0
+Average Brute-force Time (ms): 181.41
+Solves by Stage:
+  Stage 0 (Unaries):            8
+  Stage 1 (Cross-Primitives):   9
+  Stage 2 (Parameter Sweeps):   2
+  Stage 3 (Tiling/Symmetries):  8
+========================================
 ```
 
-## Data
+---
 
-Sample training puzzles live in `data/arc-agi-2/training/`. Full dataset from the official source:
-
-- https://github.com/arcprize/ARC-AGI-2
+### 4. Running a Single Puzzle End-to-End
 
 ```bash
-# clone or copy training/ + evaluation/ JSON files into data/arc-agi-2/
+# Using Mock backend (fast verification)
+python -m scripts.run_e2e --backend mock --puzzle 6150a2bd
+
+# Using Ollama local model
+python -m scripts.run_e2e --backend ollama --model qwen2.5:7b --puzzle 6150a2bd
 ```
 
-## Pipeline stages
+---
 
-0. **Constraints** (`constraints.py`) — hard size/color/object/bg rules from train pairs  
-1a. **Abstractions** — LLM proposes multiple plain-English hypotheses  
-1b. **Code gen** — each hypothesis → `solve(grid)` using library primitives  
-2. **Sandbox + self-debug** — safe exec + trace feedback retries  
-3. **Holistic judge** — compare full reasoning traces (not majority vote on grids)  
-4. **MDL tiebreak** — prefer simpler code / fewer magic numbers  
-(+ early stop when zero progress after N cycles)
+## 🏆 Kaggle Competition Deployment
 
-## Tests (no LLM)
+1. **Dry-Run Benchmark**: Run [`notebooks/kaggle_dry_run.ipynb`](notebooks/kaggle_dry_run.ipynb) on a **GPU P100** instance to measure real Qwen3-8B inference speed and verify the 8.5-hour budget.
+2. **Full Submission**: Run [`notebooks/kaggle_submission.ipynb`](notebooks/kaggle_submission.ipynb) with internet turned **OFF** to generate the final `submission.json`.
+3. See [`docs/KAGGLE_SETUP.md`](docs/KAGGLE_SETUP.md) for full setup instructions.
 
-```bash
-cd arc-solver
-python -m pytest tests/ -v
-```
+---
 
-Smoke-print preprocess + constraints on sample puzzles:
+## 📄 License
 
-```bash
-python -m scripts.smoke_preprocess
-```
-
-## Build status (Section 8)
-
-| Step | Module | Status |
-|------|--------|--------|
-| 1 | `loader.py` + sample data | done — full set: **1000 train / 120 eval** |
-| 2 | `preprocess.py` | done |
-| 3 | `constraints.py` | done |
-| 4 | `sandbox.py` | done |
-| 5 | `library.py` | done |
-| 6 | `llm_client.py` | done — `ollama` + `mock` + `api` + `kaggle_local` |
-| 7 | prompt templates | done |
-| 8 | `self_debug.py` | done |
-| 9–10 | `pipeline.py` + easy puzzles | **mock E2E 5/5**; Ollama 1.5B smoke runs but too weak to solve |
-| 11 | `judge.py` + `tiebreak.py` | done |
-| 12 | `early_stop.py` | done |
-| 13–14 | Kaggle notebook + full-set timing | notebook + `build_submission` wired; run on P100 next |
-
-### Quick commands
-
-```bash
-# Pipeline wiring (no model) — should hit 5/5 on easy geometry set
-python -m scripts.run_e2e --backend mock --all-easy
-
-# Local Ollama (after: ollama pull qwen2.5:1.5b)
-python -m scripts.run_e2e --backend ollama --puzzle 6150a2bd --budget 300
-
-# Pack evaluation dir → challenges blob, then dry-run submission (limit N)
-python -m scripts.pack_challenges --dir data/arc-agi-2/evaluation --out data/arc-agi-2/evaluation_challenges.json
-python -m scripts.build_submission --config config.kaggle.yaml --challenges data/arc-agi-2/evaluation_challenges.json --limit 1 --out submission.json
-```
-
-Note: `qwen2.5:1.5b` is for plumbing smoke-tests only. Target model for Kaggle is **Qwen3-8B 4-bit** via `kaggle_local`.
-
-## Project layout
-
-See the technical build spec. Entry point for one puzzle:
-
-```python
-from src.pipeline import solve_from_config
-guesses = solve_from_config("data/arc-agi-2/training/6150a2bd.json")
-```
+MIT License. Developed for ARC-AGI-2 reasoning research and competition benchmarking.

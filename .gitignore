@@ -3,23 +3,35 @@
 .env.*
 !.env.example
 
-# Results / caches
+# Temporary / documentation notes
+project_explanation.txt
+*.log
+
+# Results / caches / scratch
 stress_results*.json
 diag_25_results.json
 diag_*.json
+old_eval.json
 _gemini_model.txt
 submission.json
 *.submission.json
+scratch/
+artifacts/*.json
 
+# Python & testing caches
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 .pytest_cache/
 .venv/
 venv/
+ENV/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
-# Local HF / torch caches (never commit)
+# Local HuggingFace / torch caches
 .cache/
 huggingface/
 *.bin
@@ -31,3 +43,5 @@ huggingface/
 Thumbs.db
 .idea/
 .vscode/
+*.swp
+*.swo
