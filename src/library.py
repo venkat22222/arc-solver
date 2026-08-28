@@ -217,6 +217,106 @@ def symmetry_axis(grid: Grid) -> AxisInfo:
     return AxisInfo(kind="none")
 
 
+def scale_grid(grid: Grid, factor_y: int, factor_x: int) -> Grid:
+    """Magnify each cell in grid into a block of size factor_y x factor_x."""
+    if factor_y < 1 or factor_x < 1:
+        raise ValueError("scale factors must be >= 1")
+    out: Grid = []
+    for row in grid:
+        expanded_row = [val for val in row for _ in range(factor_x)]
+        for _ in range(factor_y):
+            out.append(expanded_row[:])
+    return out
+
+
+def downscale_grid(grid: Grid, factor_y: int, factor_x: int) -> Grid:
+    """Downsample grid by taking the dominant non-background color in each factor_y x factor_x block."""
+    if factor_y < 1 or factor_x < 1:
+        raise ValueError("scale factors must be >= 1")
+    bg = background_color(grid)
+    h, w = grid_shape(grid)
+    out_h, out_w = h // factor_y, w // factor_x
+    out: Grid = [[bg for _ in range(out_w)] for _ in range(out_h)]
+    for br in range(out_h):
+        for bc in range(out_w):
+            cells = [
+                grid[br * factor_y + r][bc * factor_x + c]
+                for r in range(factor_y)
+                for c in range(factor_x)
+                if br * factor_y + r < h and bc * factor_x + c < w
+            ]
+            non_bg = [c for c in cells if c != bg]
+            if non_bg:
+                out[br][bc] = Counter(non_bg).most_common(1)[0][0]
+            elif cells:
+                out[br][bc] = Counter(cells).most_common(1)[0][0]
+    return out
+
+
+def complete_symmetry(grid: Grid, axis: str = "vertical") -> Grid:
+    """Complete a partial pattern by mirroring non-background cells across the given axis."""
+    bg = background_color(grid)
+    h, w = grid_shape(grid)
+    out = [row[:] for row in grid]
+    if axis == "vertical":
+        for r in range(h):
+            for c in range(w):
+                mc = w - 1 - c
+                if out[r][c] != bg and out[r][mc] == bg:
+                    out[r][mc] = out[r][c]
+                elif out[r][mc] != bg and out[r][c] == bg:
+                    out[r][c] = out[r][mc]
+    elif axis == "horizontal":
+        for r in range(h):
+            mr = h - 1 - r
+            for c in range(w):
+                if out[r][c] != bg and out[mr][c] == bg:
+                    out[mr][c] = out[r][c]
+                elif out[mr][c] != bg and out[r][c] == bg:
+                    out[r][c] = out[mr][c]
+    elif axis == "diagonal":
+        for r in range(min(h, w)):
+            for c in range(min(h, w)):
+                if out[r][c] != bg and out[c][r] == bg:
+                    out[c][r] = out[r][c]
+                elif out[c][r] != bg and out[r][c] == bg:
+                    out[r][c] = out[c][r]
+    return out
+
+
+def extract_color_mask(grid: Grid, color: int, crop: bool = False) -> Grid:
+    """Extract only pixels of the specified color, replacing all other cells with 0."""
+    out = [[c if c == color else 0 for c in row] for row in grid]
+    if crop:
+        return crop_to_bounding_box(out)
+    return out
+
+
+def outline_objects(grid: Grid, outline_color: int) -> Grid:
+    """Draw a 1-pixel outline in outline_color around all non-background shapes."""
+    bg = background_color(grid)
+    h, w = grid_shape(grid)
+    out = [row[:] for row in grid]
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] == bg:
+                has_obj_neighbor = any(
+                    0 <= r + dr < h and 0 <= c + dc < w and grid[r + dr][c + dc] != bg
+                    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                )
+                if has_obj_neighbor:
+                    out[r][c] = outline_color
+    return out
+
+
+def extract_interior(grid: Grid) -> Grid:
+    """Remove the outer 1-pixel border from the grid."""
+    h, w = grid_shape(grid)
+    if h <= 2 or w <= 2:
+        return [row[:] for row in grid]
+    return [row[1 : w - 1] for row in grid[1 : h - 1]]
+
+
 # ---------------------------------------------------------------------------
 # Library catalog (injected into code-gen prompts)
 # ---------------------------------------------------------------------------
@@ -241,6 +341,12 @@ PRIMITIVES = {
     "overlay": overlay,
     "symmetry_axis": symmetry_axis,
     "background_color": background_color,
+    "scale_grid": scale_grid,
+    "downscale_grid": downscale_grid,
+    "complete_symmetry": complete_symmetry,
+    "extract_color_mask": extract_color_mask,
+    "outline_objects": outline_objects,
+    "extract_interior": extract_interior,
 }
 
 
@@ -266,6 +372,12 @@ def primitive_signatures() -> List[str]:
         "overlay(grid_a: List[List[int]], grid_b: List[List[int]], transparent: int = 0) -> List[List[int]]",
         "symmetry_axis(grid: List[List[int]]) -> AxisInfo",
         "background_color(grid: List[List[int]]) -> int",
+        "scale_grid(grid: List[List[int]], factor_y: int, factor_x: int) -> List[List[int]]",
+        "downscale_grid(grid: List[List[int]], factor_y: int, factor_x: int) -> List[List[int]]",
+        "complete_symmetry(grid: List[List[int]], axis: str = 'vertical') -> List[List[int]]",
+        "extract_color_mask(grid: List[List[int]], color: int, crop: bool = False) -> List[List[int]]",
+        "outline_objects(grid: List[List[int]], outline_color: int) -> List[List[int]]",
+        "extract_interior(grid: List[List[int]]) -> List[List[int]]",
     ]
 
 

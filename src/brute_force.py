@@ -21,6 +21,12 @@ from .library import (
     transpose,
     recolor,
     fill_enclosed_regions,
+    scale_grid,
+    downscale_grid,
+    complete_symmetry,
+    extract_color_mask,
+    outline_objects,
+    extract_interior,
 )
 from .preprocess import grid_shape
 
@@ -107,6 +113,10 @@ def _unary_candidates() -> List[Tuple[str, Transform, str]]:
         ("reflect_vertical", reflect_vertical, "reflect_vertical(grid)"),
         ("transpose", transpose, "transpose(grid)"),
         ("crop_to_bounding_box", crop_to_bounding_box, "crop_to_bounding_box(grid)"),
+        ("extract_interior", extract_interior, "extract_interior(grid)"),
+        ("complete_symmetry_vertical", lambda g: complete_symmetry(g, "vertical"), 'complete_symmetry(grid, "vertical")'),
+        ("complete_symmetry_horizontal", lambda g: complete_symmetry(g, "horizontal"), 'complete_symmetry(grid, "horizontal")'),
+        ("complete_symmetry_diagonal", lambda g: complete_symmetry(g, "diagonal"), 'complete_symmetry(grid, "diagonal")'),
     ]
 
 
@@ -282,6 +292,39 @@ def try_brute_force(train_pairs: Sequence[TrainPair]) -> Optional[BruteForceHit]
         if _matches_all(fn, train_pairs):
             name = f"fill_enclosed_{fill}"
             return BruteForceHit(name=name, code=_code_return(f"fill_enclosed_regions(grid, {fill})"), n_ops=1, stage=2, candidate_name="fill_enclosed")
+
+    # Scale grid sweeps
+    for fy, fx in ((2, 2), (3, 3), (4, 4), (2, 1), (1, 2), (3, 1), (1, 3)):
+        fn = lambda g, a=fy, b=fx: scale_grid(g, a, b)  # noqa: E731
+        if _matches_all(fn, train_pairs):
+            name = f"scale_grid_{fy}x{fx}"
+            return BruteForceHit(name=name, code=_code_return(f"scale_grid(grid, {fy}, {fx})"), n_ops=1, stage=2, candidate_name="scale_grid")
+
+    # Downscale grid sweeps
+    for fy, fx in ((2, 2), (3, 3), (2, 1), (1, 2)):
+        fn = lambda g, a=fy, b=fx: downscale_grid(g, a, b)  # noqa: E731
+        if _matches_all(fn, train_pairs):
+            name = f"downscale_grid_{fy}x{fx}"
+            return BruteForceHit(name=name, code=_code_return(f"downscale_grid(grid, {fy}, {fx})"), n_ops=1, stage=2, candidate_name="downscale_grid")
+
+    # Extract color mask sweeps
+    for c in colors:
+        fn_uncropped = lambda g, col=c: extract_color_mask(g, col, crop=False)  # noqa: E731
+        if _matches_all(fn_uncropped, train_pairs):
+            name = f"extract_color_mask_{c}"
+            return BruteForceHit(name=name, code=_code_return(f"extract_color_mask(grid, {c})"), n_ops=1, stage=2, candidate_name="extract_color_mask")
+
+        fn_cropped = lambda g, col=c: extract_color_mask(g, col, crop=True)  # noqa: E731
+        if _matches_all(fn_cropped, train_pairs):
+            name = f"extract_color_mask_{c}_cropped"
+            return BruteForceHit(name=name, code=_code_return(f"extract_color_mask(grid, {c}, crop=True)"), n_ops=1, stage=2, candidate_name="extract_color_mask_cropped")
+
+    # Outline objects sweeps
+    for c in colors:
+        fn = lambda g, col=c: outline_objects(g, col)  # noqa: E731
+        if _matches_all(fn, train_pairs):
+            name = f"outline_objects_{c}"
+            return BruteForceHit(name=name, code=_code_return(f"outline_objects(grid, {c})"), n_ops=1, stage=2, candidate_name="outline_objects")
 
     # STAGE 3: Complex / tiling candidates
     if _matches_all(_mirror_tile_2x2, train_pairs):
