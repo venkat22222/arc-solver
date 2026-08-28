@@ -1,12 +1,15 @@
-# Kaggle P100 / real target run — Qwen3-8B 4-bit in-process
+# Kaggle T4 GPU — Phase 1: Multi-Candidate Sampling + Voting
 backend: "kaggle_local"
 model_name: "Qwen/Qwen3-8B"
-n_abstractions_per_puzzle: 3
-max_self_debug_retries: 3
+
+# Phase 1 parameters: sample many, verify hard, vote
+n_abstractions_per_puzzle: 2        # 2 hypothesis cycles (was: 3)
+n_candidates_per_hypothesis: 8      # NEW: sample 8 code candidates per hypothesis
+max_self_debug_retries: 1           # Reduced: only 1 debug attempt on first sample (was: 3)
 n_judges: 3
 total_time_budget_hours: 12
 data_dir: "/kaggle/input/arc-prize-2025"
-early_stop_after_cycles: 3
+early_stop_after_cycles: 2
 sandbox_timeout_seconds: 5
 connectivity: 4
 triage_enabled: true
@@ -23,4 +26,3 @@ kaggle_local:
   bnb_4bit_use_double_quant: true
   trust_remote_code: true
   llm_int8_enable_fp32_cpu_offload: false
-  # P100 16GB fits Qwen3-8B NF4 without CPU offload
