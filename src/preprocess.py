@@ -179,9 +179,12 @@ def format_cell_diff(input_grid: Grid, output_grid: Grid) -> Optional[str]:
         mask.append(" ".join("X" if (r, c) in changed else "." for c in range(iw)))
     lines.append("Diff mask (. = same, X = changed):")
     lines.extend(mask)
-    lines.append("Changes (row, col): old -> new:")
-    for r, c, old, new in changes:
+    lines.append("Sample changes (row, col): old -> new:")
+    max_changes_to_show = 15
+    for r, c, old, new in changes[:max_changes_to_show]:
         lines.append(f"  ({r},{c}): {old} -> {new}")
+    if len(changes) > max_changes_to_show:
+        lines.append(f"  (... and {len(changes) - max_changes_to_show} more pixel changes omitted for brevity)")
     return "\n".join(lines)
 
 
@@ -205,12 +208,17 @@ def describe_grid(
     if not objects:
         lines.append("  (none — empty or solid background)")
     else:
-        for obj in objects:
+        # Prioritize largest / most prominent objects and cap at 10
+        sorted_objs = sorted(objects, key=lambda o: -o.size)
+        max_show = 10
+        for obj in sorted_objs[:max_show]:
             r0, c0, r1, c1 = obj.bbox
             lines.append(
                 f"- Object {obj.id}: color={obj.color}, size={obj.size} cells, "
                 f"bbox=({r0},{c0})-({r1},{c1}), shape={obj.shape_name}"
             )
+        if len(objects) > max_show:
+            lines.append(f"  (... and {len(objects) - max_show} smaller background/fragment objects omitted)")
 
     if include_raw:
         lines.append("Raw grid:")
