@@ -473,12 +473,17 @@ class LLMClient:
         assert self._hf_model is not None and self._hf_tokenizer is not None
 
         text = self._format_kaggle_prompt(prompt)
-        inputs = self._hf_tokenizer(text, return_tensors="pt")
+        inputs = self._hf_tokenizer(
+            text,
+            return_tensors="pt",
+            max_length=2048,
+            truncation=True,
+        )
         device = self._hf_input_device()
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         gen_kwargs: dict[str, Any] = {
-            "max_new_tokens": max_tokens,
+            "max_new_tokens": min(max_tokens, 512),
             "pad_token_id": self._hf_tokenizer.pad_token_id,
             "eos_token_id": self._hf_tokenizer.eos_token_id,
         }
@@ -496,4 +501,7 @@ class LLMClient:
             output_ids = self._hf_model.generate(**inputs, **gen_kwargs)
 
         gen = output_ids[0][inputs["input_ids"].shape[-1] :]
-        return self._hf_tokenizer.decode(gen, skip_special_tokens=True)
+        decoded = self._hf_tokenizer.decode(gen, skip_special_tokens=True)
+        del inputs, output_ids
+        torch.cuda.empty_cache()
+        return decoded
