@@ -32,6 +32,7 @@ from .sandbox import safe_execute
 from .self_debug import self_debug_loop
 from .tiebreak import mdl_score
 from .voting import majority_vote, top_k_by_votes
+from .augmentation import AUGMENTATIONS, augment_train_pairs, augment_test_inputs
 
 Grid = List[List[int]]
 
@@ -244,10 +245,90 @@ def solve_puzzle(
     return outputs[:2]
 
 
+def solve_with_augmentation(
+    puzzle: Puzzle,
+    llm_client: LLMClient,
+    time_budget_seconds: float = 120.0,
+    n_augmentations: int = 4,
+    **solve_kwargs,
+) -> List[Grid]:
+    """Solve a puzzle using test-time augmentation + voting.
+
+    Phase 2: Try solving under multiple geometric transforms (rotations,
+    flips, transposes). Un-transform each output and vote across all
+    augmentations for the most consistent answer.
+
+    Strategy:
+      1. Always try identity (original puzzle) first with full budget.
+      2. If identity finds verified candidates, still try a few more
+         augmentations to improve voting confidence.
+      3. Collect all un-transformed outputs and majority-vote.
+
+    n_augmentations controls how many of the 8 isometries to try.
+    Default 4 = identity + rot90 + flip_h + transpose (best diversity).
+    """
+    start = time.time()
+
+    # Select which augmentations to use (identity is always first)
+    augs_to_try = AUGMENTATIONS[:n_augmentations]
+
+    all_outputs: List[Grid] = []
+
+    for aug_name, fwd, inv in augs_to_try:
+        remaining_time = time_budget_seconds - (time.time() - start)
+        if remaining_time < 5.0:
+            break
+
+        # Budget per augmentation: divide remaining time among untried augs
+        augs_remaining = n_augmentations - len(all_outputs) // max(1, len(all_outputs) or 1)
+        per_aug_budget = remaining_time / max(1, n_augmentations - AUGMENTATIONS.index((aug_name, fwd, inv)))
+
+        # Create augmented puzzle
+        aug_train = augment_train_pairs(puzzle.train_pairs, fwd)
+        aug_tests = augment_test_inputs(puzzle.test_inputs, fwd)
+        aug_test_outputs = [fwd(to) for to in puzzle.test_outputs] if puzzle.test_outputs else []
+        aug_puzzle = Puzzle(
+            id=f"{puzzle.id}_{aug_name}",
+            train_pairs=aug_train,
+            test_inputs=aug_tests,
+            test_outputs=aug_test_outputs,
+        )
+
+        # Solve the augmented puzzle
+        aug_results = solve_puzzle(
+            aug_puzzle,
+            llm_client,
+            time_budget_seconds=per_aug_budget,
+            **solve_kwargs,
+        )
+
+        # Un-transform the outputs back to original orientation
+        for grid in aug_results:
+            untransformed = inv(grid)
+            all_outputs.append(untransformed)
+
+        # If we already have 4+ outputs from multiple augmentations,
+        # we have enough diversity for a good vote
+        if len(all_outputs) >= 6:
+            break
+
+    if not all_outputs:
+        return fallback_guess(puzzle)
+
+    # Majority vote across all un-transformed outputs
+    top_outputs = top_k_by_votes(all_outputs, k=2)
+    outputs: List[Grid] = list(top_outputs)
+    while len(outputs) < 2:
+        outputs.append(_identity(puzzle.test_inputs[0]))
+    return outputs[:2]
+
+
 def solve_all(
     puzzle_list: Sequence[Puzzle],
     llm_client: LLMClient,
     total_time_budget_seconds: float,
+    use_augmentation: bool = True,
+    n_augmentations: int = 4,
     **solve_kwargs,
 ) -> Dict[str, List[Grid]]:
     """Iterate evaluation set with a global time budget; redistribute unused time."""
@@ -259,9 +340,19 @@ def solve_all(
         n_left = len(remaining) - i
         per_puzzle = time_left / n_left
         start = time.time()
-        results[puzzle.id] = solve_puzzle(
-            puzzle, llm_client, time_budget_seconds=per_puzzle, **solve_kwargs
-        )
+        if use_augmentation:
+            results[puzzle.id] = solve_with_augmentation(
+                puzzle, llm_client,
+                time_budget_seconds=per_puzzle,
+                n_augmentations=n_augmentations,
+                **solve_kwargs,
+            )
+        else:
+            results[puzzle.id] = solve_puzzle(
+                puzzle, llm_client,
+                time_budget_seconds=per_puzzle,
+                **solve_kwargs,
+            )
         elapsed = time.time() - start
         time_left = max(0.0, time_left - elapsed)
     return results
@@ -271,9 +362,8 @@ def solve_from_config(puzzle_path: str | Path, config_path: str | Path | None = 
     config = load_config(config_path)
     client = LLMClient.from_config(config)
     puzzle = load_puzzle(puzzle_path)
-    return solve_puzzle(
-        puzzle,
-        client,
+    use_aug = config.get("use_augmentation", True)
+    solve_kwargs = dict(
         n_abstractions=config.get("n_abstractions_per_puzzle", 2),
         max_self_debug_retries=config.get("max_self_debug_retries", 1),
         n_candidates=config.get("n_candidates_per_hypothesis", 8),
@@ -282,10 +372,18 @@ def solve_from_config(puzzle_path: str | Path, config_path: str | Path | None = 
         sandbox_timeout=config.get("sandbox_timeout_seconds", 5),
         connectivity=config.get("connectivity", 4),
     )
+    if use_aug:
+        return solve_with_augmentation(
+            puzzle, client,
+            n_augmentations=config.get("n_augmentations", 4),
+            **solve_kwargs,
+        )
+    return solve_puzzle(puzzle, client, **solve_kwargs)
 
 
 __all__ = [
     "solve_puzzle",
+    "solve_with_augmentation",
     "solve_all",
     "solve_from_config",
     "fallback_guess",

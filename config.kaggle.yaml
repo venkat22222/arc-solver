@@ -2,10 +2,12 @@
 backend: "kaggle_local"
 model_name: "Qwen/Qwen3-8B"
 
-# Phase 1 parameters: sample many, verify hard, vote
+# Phase 1 & 2 parameters: sample many, verify hard, vote, augment
 n_abstractions_per_puzzle: 2        # 2 hypothesis cycles (was: 3)
-n_candidates_per_hypothesis: 8      # NEW: sample 8 code candidates per hypothesis
-max_self_debug_retries: 1           # Reduced: only 1 debug attempt on first sample (was: 3)
+n_candidates_per_hypothesis: 8      # sample 8 code candidates per hypothesis
+max_self_debug_retries: 1           # 1 debug attempt on first sample only
+use_augmentation: true              # Phase 2: Test-time geometric augmentation
+n_augmentations: 4                  # Test top 4 isometries (identity, rot90, flip_h, transpose)
 n_judges: 3
 total_time_budget_hours: 12
 data_dir: "/kaggle/input/arc-prize-2025"

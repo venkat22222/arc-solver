@@ -1,8 +1,11 @@
 # Laptop / Ollama default
 backend: "ollama"
 model_name: "qwen2.5:7b"
-n_abstractions_per_puzzle: 3
-max_self_debug_retries: 3
+n_abstractions_per_puzzle: 2
+n_candidates_per_hypothesis: 8
+max_self_debug_retries: 1
+use_augmentation: true
+n_augmentations: 4
 n_judges: 3
 total_time_budget_hours: 12
 data_dir: "./data/arc-agi-2"
