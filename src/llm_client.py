@@ -472,11 +472,13 @@ class LLMClient:
             self._init_kaggle_local()
         assert self._hf_model is not None and self._hf_tokenizer is not None
 
+        tok = self._hf_tokenizer
+        tok.truncation_side = "left"
         text = self._format_kaggle_prompt(prompt)
-        inputs = self._hf_tokenizer(
+        inputs = tok(
             text,
             return_tensors="pt",
-            max_length=1024,
+            max_length=2048,
             truncation=True,
         )
         device = self._hf_input_device()

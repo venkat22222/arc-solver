@@ -75,20 +75,24 @@ def verify_on_all_train(
     code: str,
     train_pairs: Sequence,
     timeout_seconds: float = 5.0,
-) -> bool:
+) -> Tuple[bool, str]:
     """Hard verification: code must produce correct output for EVERY train pair.
 
-    This is the key filter used by top competitors — instead of trying to
-    debug broken code, we sample many candidates and only keep the ones
-    that pass all examples perfectly.
+    Returns (True, 'Passed') or (False, reason_string).
     """
     if not code or not code.strip():
-        return False
-    for inp, expected in train_pairs:
+        return False, "Empty code from LLM"
+    if "def solve" not in code:
+        return False, "Missing def solve(grid)"
+    for pair_i, (inp, expected) in enumerate(train_pairs, 1):
         result = safe_execute(code, inp, timeout_seconds=timeout_seconds)
-        if not result.success or result.output_grid != expected:
-            return False
-    return True
+        if not result.success:
+            return False, f"Pair {pair_i} error: {result.error_message}"
+        if result.output_grid != expected:
+            eh, ew = len(expected), len(expected[0]) if expected else 0
+            oh, ow = len(result.output_grid), len(result.output_grid[0]) if result.output_grid else 0
+            return False, f"Pair {pair_i} mismatch (got {oh}x{ow} vs expected {eh}x{ew})"
+    return True, "Passed all training pairs"
 
 
 def tiebreak_fill(
@@ -149,14 +153,18 @@ def solve_puzzle(
 
     # ── Stage 1: Fast Direct Program-of-Thought (PoT) Synthesis ──
     # Top competitors generate direct Python candidates first before doing multi-turn abstractions
+    print(f"  [Direct PoT] Sampling {min(n_candidates, 3)} direct candidates...")
     direct_prompt = build_direct_solve_prompt(puzzle.train_pairs, library_text=library_text)
     for sample_i in range(min(n_candidates, 3)):
         if time.time() - start > time_budget_seconds:
+            print("  [Direct PoT] Time budget reached.")
             break
         sample_temp = 0.2 if sample_i == 0 else (0.5 + 0.2 * sample_i)
         code_raw = llm_client.generate(direct_prompt, temperature=sample_temp)
         code = extract_code(code_raw)
-        if verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout):
+        ok, reason = verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout)
+        if ok:
+            print(f"  [Direct Candidate #{sample_i+1}] PASSED all train pairs!")
             state.candidates_verified += 1
             test_out = apply_to_test(code, puzzle.test_inputs[0], sandbox_timeout)
             if test_out is not None:
@@ -173,6 +181,9 @@ def solve_puzzle(
             # If direct candidate verifies, we have a working solution!
             if len(verified_outputs) >= 2:
                 break
+        else:
+            first_line = code.splitlines()[0] if code else "EMPTY"
+            print(f"  [Direct Candidate #{sample_i+1}] FAILED: {reason} | head: {first_line[:50]}")
 
     # If direct synthesis already produced 2+ verified outputs, return immediately!
     if len(verified_outputs) >= 2:
@@ -198,9 +209,11 @@ def solve_puzzle(
         hypotheses = parse_hypotheses(raw)
         hypotheses, _rejected = filter_hypotheses(hypotheses, constraints)
         if not hypotheses:
+            print(f"  [Hypothesis Cycle {cycle+1}] No valid hypotheses generated.")
             continue
 
-        for hyp in hypotheses:
+        print(f"  [Hypothesis Cycle {cycle+1}] Generated {len(hypotheses)} hypotheses.")
+        for hyp_idx, hyp in enumerate(hypotheses, 1):
             if time.time() - start > time_budget_seconds:
                 break
 
@@ -222,7 +235,9 @@ def solve_puzzle(
                 code_raw = llm_client.generate(code_prompt, temperature=sample_temp)
                 code = extract_code(code_raw)
 
-                if verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout):
+                ok, reason = verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout)
+                if ok:
+                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] PASSED all train pairs!")
                     state.candidates_verified += 1
                     test_out = apply_to_test(code, puzzle.test_inputs[0], sandbox_timeout)
                     if test_out is not None:
@@ -237,6 +252,8 @@ def solve_puzzle(
                         )
                     )
                 else:
+                    first_line = code.splitlines()[0] if code else "EMPTY"
+                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] FAILED: {reason} | head: {first_line[:50]}")
                     if code:
                         unverified_codes.append(code)
 
