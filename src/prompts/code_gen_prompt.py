@@ -65,19 +65,32 @@ STRICT HELPER RULES:
 """
 
 
+def format_grid_compact(grid: Sequence[Sequence[int]]) -> str:
+    """Format a 2D grid into clean, spatial space-separated text rows for LLM vision."""
+    return "\n".join(" ".join(str(c) for c in row) for row in grid)
+
+
 def _format_train_examples_for_codegen(train_pairs: Sequence[Tuple[list, list]], max_pairs: int = 3) -> str:
-    lines = ["Task Examples (ground-truth input -> output pairs):"]
+    blocks = []
     for idx, (inp, out) in enumerate(train_pairs[:max_pairs], 1):
         ih, iw = len(inp), len(inp[0]) if inp else 0
         oh, ow = len(out), len(out[0]) if out else 0
-        lines.append(f"Example {idx} (input {ih}x{iw} -> output {oh}x{ow}):")
         if ih <= 20 and iw <= 20:
-            lines.append(f"  Input:  {inp}")
-            lines.append(f"  Output: {out}")
+            inp_str = format_grid_compact(inp)
+            out_str = format_grid_compact(out)
+            blocks.append(f"=== Example {idx} ===\nInput ({ih}x{iw}):\n{inp_str}\n\nOutput ({oh}x{ow}):\n{out_str}")
         else:
-            lines.append(f"  Input:  [shape {ih}x{iw}]")
-            lines.append(f"  Output: [shape {oh}x{ow}]")
-    return "\n".join(lines)
+            blocks.append(f"=== Example {idx} ===\nInput ({ih}x{iw})\nOutput ({oh}x{ow})")
+    return "\n\n".join(blocks)
+
+
+_COMPACT_HELPERS = """Available helper functions in scope:
+- rotate_90(grid), rotate_180(grid), rotate_270(grid)
+- reflect_horizontal(grid), reflect_vertical(grid), transpose(grid)
+- recolor(grid, mapping_dict) -> e.g. recolor(grid, {8: 1, 2: 3})
+- find_objects(grid, connectivity=4) -> list of ObjectInfo (accessible: obj.cells, obj.color, obj.bbox, obj.size)
+- gravity_drop(grid, bg=0), fill_enclosed_regions(grid, color)
+- crop_to_bounding_box(grid, bbox), scale_grid(grid, factor_y, factor_x)"""
 
 
 def build_code_gen_prompt(
@@ -86,27 +99,18 @@ def build_code_gen_prompt(
     prefer_whole_grid: bool = False,
     train_pairs: Sequence[Tuple[list, list]] | None = None,
 ) -> str:
-    if library_text is None:
-        library_text = generate_library_schema()
-
-    whole = _WHOLE_GRID_RULE if prefer_whole_grid else ""
     examples_block = ""
     if train_pairs:
         examples_block = f"\n{_format_train_examples_for_codegen(train_pairs)}\n"
 
-    return f"""Implement the ARC puzzle solution as Python.
+    return f"""You are solving an ARC visual reasoning puzzle in Python.
 {examples_block}
 Hypothesis: "{hypothesis}"
 
-{library_text}
-{_STRICT_SCHEMA_RULE}
-{_COMPOSE_RULE}{whole}
+{_COMPACT_HELPERS}
 
-Rules:
-- Signature: def solve(grid: List[List[int]]) -> List[List[int]]
-- No imports. Helpers above are already in scope — call by name.
-- Must produce the exact output for all examples.
-- Output ONLY the Python code enclosed in a single ```python code block. Zero explanation.
+Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that implements this transformation.
+Output ONLY the Python code in a ```python ``` code block:
 
 ```python
 def solve(grid: List[List[int]]) -> List[List[int]]:
@@ -118,22 +122,18 @@ def build_direct_solve_prompt(
     library_text: str | None = None,
 ) -> str:
     """Fast direct Program-of-Thought prompt: synthesize def solve(grid) directly from input->output pairs."""
-    if library_text is None:
-        library_text = generate_library_schema()
-
     examples_block = _format_train_examples_for_codegen(train_pairs, max_pairs=3)
 
-    return f"""Task Specification:
+    return f"""You are solving an ARC visual reasoning puzzle in Python.
+
 {examples_block}
 
-Available Library Helpers (already in scope, no imports needed):
-{library_text}
+{_COMPACT_HELPERS}
 
 Instructions:
-Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that implements the visual transformation from input to output.
-- Must return a 2D list of integers (0-9).
+Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that transforms any input grid into its corresponding output grid following the visual pattern demonstrated above.
 - Must work for all example pairs above.
-- Output ONLY the python code block starting with ```python and ending with ```.
+- Output ONLY the Python code in a ```python ``` block.
 
 ```python
 def solve(grid: List[List[int]]) -> List[List[int]]:
@@ -162,11 +162,23 @@ def extract_code(response: str) -> str:
         start = text.index("def solve")
         return _strip_imports(_ensure_solve(text[start:].strip()))
 
+    # If the response starts immediately with the function body or logic
+    if any(k in text for k in ("return ", "out =", "grid", "for ", "if ", "    ")):
+        full_code = "def solve(grid: List[List[int]]) -> List[List[int]]:\n"
+        for line in text.splitlines():
+            if not line.startswith("    ") and not line.startswith("\t"):
+                full_code += "    " + line + "\n"
+            else:
+                full_code += line + "\n"
+        return _strip_imports(full_code.strip())
+
     return _strip_imports(text)
 
 
 def _ensure_solve(code: str) -> str:
-    """Keep all helper functions and classes; verify def solve exists."""
+    """Ensure def solve exists in code."""
+    if "def solve" not in code:
+        return "def solve(grid: List[List[int]]) -> List[List[int]]:\n    " + code.replace("\n", "\n    ")
     return code.strip()
 
 
