@@ -197,16 +197,43 @@ def extract_code(response: str) -> str:
 
 
 def _sanitize_code_lines(code: str) -> str:
-    """Comment out stray raw matrix draft lines (e.g. '0 0 0 3 0 0') that trigger invalid decimal literal SyntaxErrors."""
+    """First-pass: comment out bare space-separated digit rows.
+    Then: compile-and-repair loop — if a SyntaxError remains, comment out the
+    exact offending line (by line number) and retry, up to 10 times."""
+    lines = code.splitlines()
+
+    # Pass 1 – regex scrub for obvious bare-matrix lines
     cleaned = []
-    for line in code.splitlines():
+    for line in lines:
         stripped = line.strip()
-        # If line contains space-separated numbers without Python operators/keywords, comment it out
+        # Bare space-separated digit line (e.g. "0 0 3 0 0")
         if stripped and re.match(r"^[0-9\s,\[\]]+$", stripped) and not stripped.isdigit():
-            cleaned.append("    # " + stripped)
+            cleaned.append("    # [scrubbed] " + stripped)
         else:
             cleaned.append(line)
-    return "\n".join(cleaned)
+    code = "\n".join(cleaned)
+
+    # Pass 2 – compile-and-repair loop
+    for _ in range(10):
+        try:
+            compile(code, "<generated>", "exec")
+            break  # compiles cleanly
+        except SyntaxError as exc:
+            lineno = exc.lineno  # 1-based
+            if lineno is None:
+                break
+            code_lines = code.splitlines()
+            idx = lineno - 1
+            if 0 <= idx < len(code_lines):
+                bad = code_lines[idx]
+                code_lines[idx] = "    # [repaired] " + bad.strip()
+                code = "\n".join(code_lines)
+            else:
+                break
+        except Exception:
+            break
+
+    return code
 
 
 def _ensure_solve(code: str) -> str:
