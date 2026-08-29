@@ -121,14 +121,16 @@ def build_code_gen_prompt(
 
 {_REFERENCE_EXAMPLE}
 
-Task to Solve:
+### TASK DATA (read-only, do NOT copy these numbers into your code) ###
 {examples_block}
-Hypothesis: "{hypothesis}"
+### HYPOTHESIS ###
+{hypothesis}
 
+### HELPER FUNCTIONS IN SCOPE ###
 {_COMPACT_HELPERS}
 
-Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that implements this transformation.
-Output ONLY the Python code in a ```python ``` code block:
+### YOUR PYTHON SOLUTION (write ONLY code below) ###
+The function below receives the input grid and must return the output grid:
 
 ```python
 def solve(grid: List[List[int]]) -> List[List[int]]:
@@ -146,15 +148,15 @@ def build_direct_solve_prompt(
 
 {_REFERENCE_EXAMPLE}
 
-Task to Solve:
+### TASK DATA (read-only, do NOT copy these numbers into your code) ###
 {examples_block}
 
+### HELPER FUNCTIONS IN SCOPE ###
 {_COMPACT_HELPERS}
 
-Instructions:
-Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that transforms any input grid into its corresponding output grid following the visual pattern demonstrated above.
-- Must work for all example pairs above.
-- Output ONLY the Python code in a ```python ``` block.
+### YOUR PYTHON SOLUTION (write ONLY code below) ###
+Write `def solve(grid)` that turns any input above into its corresponding output.
+Do NOT reproduce the input/output grids — write Python logic only.
 
 ```python
 def solve(grid: List[List[int]]) -> List[List[int]]:
@@ -193,7 +195,7 @@ def extract_code(response: str) -> str:
                 full_code += line + "\n"
         return _strip_imports(_sanitize_code_lines(full_code.strip()))
 
-    return _strip_imports(_sanitize_code_lines(text))
+    return _strip_imports(_sanitize_code_lines(_ensure_solve(text)))
 
 
 def _sanitize_code_lines(code: str) -> str:
