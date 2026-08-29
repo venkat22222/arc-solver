@@ -171,17 +171,17 @@ def extract_code(response: str) -> str:
     fences = list(re.finditer(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE))
     if fences:
         code = fences[-1].group(1).strip()
-        return _strip_imports(_ensure_solve(code))
+        return _strip_imports(_sanitize_code_lines(_ensure_solve(code)))
 
     # Truncated opening fence without closing ```
     open_fence = re.search(r"```(?:python)?\s*\n(.*)$", text, re.DOTALL | re.IGNORECASE)
     if open_fence:
         code = open_fence.group(1).strip().rstrip("`").strip()
-        return _strip_imports(_ensure_solve(code))
+        return _strip_imports(_sanitize_code_lines(_ensure_solve(code)))
 
     if "def solve" in text:
         start = text.index("def solve")
-        return _strip_imports(_ensure_solve(text[start:].strip()))
+        return _strip_imports(_sanitize_code_lines(_ensure_solve(text[start:].strip())))
 
     # If the response starts immediately with the function body or logic
     if any(k in text for k in ("return ", "out =", "grid", "for ", "if ", "    ")):
@@ -191,9 +191,22 @@ def extract_code(response: str) -> str:
                 full_code += "    " + line + "\n"
             else:
                 full_code += line + "\n"
-        return _strip_imports(full_code.strip())
+        return _strip_imports(_sanitize_code_lines(full_code.strip()))
 
-    return _strip_imports(text)
+    return _strip_imports(_sanitize_code_lines(text))
+
+
+def _sanitize_code_lines(code: str) -> str:
+    """Comment out stray raw matrix draft lines (e.g. '0 0 0 3 0 0') that trigger invalid decimal literal SyntaxErrors."""
+    cleaned = []
+    for line in code.splitlines():
+        stripped = line.strip()
+        # If line contains space-separated numbers without Python operators/keywords, comment it out
+        if stripped and re.match(r"^[0-9\s,\[\]]+$", stripped) and not stripped.isdigit():
+            cleaned.append("    # " + stripped)
+        else:
+            cleaned.append(line)
+    return "\n".join(cleaned)
 
 
 def _ensure_solve(code: str) -> str:
