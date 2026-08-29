@@ -100,7 +100,8 @@ Input:
 Output:
 1 0
 0 1
-Solution:
+Reasoning: The output horizontally mirrors the input grid.
+Code:
 ```python
 def solve(grid: List[List[int]]) -> List[List[int]]:
     return reflect_horizontal(grid)
@@ -121,19 +122,19 @@ def build_code_gen_prompt(
 
 {_REFERENCE_EXAMPLE}
 
-### TASK DATA (read-only, do NOT copy these numbers into your code) ###
+### TASK DATA ###
 {examples_block}
+
 ### HYPOTHESIS ###
 {hypothesis}
 
 ### HELPER FUNCTIONS IN SCOPE ###
 {_COMPACT_HELPERS}
 
-### YOUR PYTHON SOLUTION (write ONLY code below) ###
-The function below receives the input grid and must return the output grid:
+### INSTRUCTIONS ###
+Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]:` in a ```python ``` code block that implements the hypothesis.
 
 ```python
-def solve(grid: List[List[int]]) -> List[List[int]]:
 """
 
 
@@ -148,18 +149,17 @@ def build_direct_solve_prompt(
 
 {_REFERENCE_EXAMPLE}
 
-### TASK DATA (read-only, do NOT copy these numbers into your code) ###
+### TASK DATA ###
 {examples_block}
 
 ### HELPER FUNCTIONS IN SCOPE ###
 {_COMPACT_HELPERS}
 
-### YOUR PYTHON SOLUTION (write ONLY code below) ###
-Write `def solve(grid)` that turns any input above into its corresponding output.
-Do NOT reproduce the input/output grids — write Python logic only.
+### INSTRUCTIONS ###
+1. State the step-by-step transformation reasoning in 1-2 lines.
+2. Provide the Python solution inside a ```python ``` block.
 
-```python
-def solve(grid: List[List[int]]) -> List[List[int]]:
+Reasoning:
 """
 
 
