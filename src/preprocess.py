@@ -27,6 +27,21 @@ class ObjectInfo:
     bbox: Tuple[int, int, int, int]  # r0, c0, r1, c1 inclusive
     shape_pixels: Tuple[Tuple[int, int], ...]  # coords relative to bbox top-left
     shape_name: str
+    cells: Tuple[Tuple[int, int], ...] = ()  # Absolute (r, c) coordinates in grid
+
+    @property
+    def pixels(self) -> Tuple[Tuple[int, int], ...]:
+        """Alias for absolute coordinates (r, c)."""
+        return self.cells
+
+    @property
+    def coords(self) -> Tuple[Tuple[int, int], ...]:
+        """Alias for absolute coordinates (r, c)."""
+        return self.cells
+
+    def __iter__(self):
+        """Allows direct iteration: for r, c in obj: ..."""
+        return iter(self.cells)
 
 
 def grid_shape(grid: Grid) -> Tuple[int, int]:
@@ -99,6 +114,7 @@ def find_objects(
                     bbox=(r0, c0, r1, c1),
                     shape_pixels=shape_pixels,
                     shape_name=_name_shape(shape_pixels, r1 - r0 + 1, c1 - c0 + 1),
+                    cells=tuple(sorted(cells)),
                 )
             )
     return objects

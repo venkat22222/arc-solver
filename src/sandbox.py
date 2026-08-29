@@ -410,7 +410,12 @@ class SandboxPool:
                 slot.task_queue.put(None)
             except Exception:
                 pass
-            slot.terminate_and_replace()
+            try:
+                if slot.process.is_alive():
+                    slot.process.terminate()
+                    slot.process.join(timeout=0.2)
+            except Exception:
+                pass
 
 
 _GLOBAL_POOL: Optional[SandboxPool] = None

@@ -173,12 +173,13 @@ def solve_puzzle(
             )
 
             # ── Multi-candidate sampling: generate N codes, keep verified ──
+            unverified_codes: List[str] = []
             for sample_i in range(n_candidates):
                 if time.time() - start > time_budget_seconds:
                     break
 
-                # Use higher temperature for diversity across samples
-                sample_temp = 0.3 if sample_i == 0 else 0.7
+                # Vary temperature across samples to maximize exploration diversity
+                sample_temp = 0.2 if sample_i == 0 else (0.5 + 0.1 * (sample_i % 4))
                 code_raw = llm_client.generate(code_prompt, temperature=sample_temp)
                 code = extract_code(code_raw)
 
@@ -197,36 +198,42 @@ def solve_puzzle(
                         )
                     )
                 else:
-                    # If first sample fails all train pairs, try self-debug
-                    # as a fallback (but only for the first sample to save time)
-                    if sample_i == 0 and max_self_debug_retries > 0:
-                        verified_code, _stats = self_debug_loop(
-                            llm_client,
-                            code,
-                            puzzle.train_pairs,
-                            max_retries=min(max_self_debug_retries, 1),
-                            timeout_seconds=sandbox_timeout,
-                        )
-                        if verified_code:
-                            state.candidates_verified += 1
-                            test_out = apply_to_test(
-                                verified_code, puzzle.test_inputs[0], sandbox_timeout
-                            )
-                            if test_out is not None:
-                                verified_outputs.append(test_out)
-                                verified_codes.append(verified_code)
-                            candidates.append(
-                                Candidate(
-                                    hypothesis=hyp,
-                                    code=verified_code,
-                                    verification_summary="verified via self-debug",
-                                    output_grids=[test_out] if test_out else None,
-                                )
-                            )
+                    if code:
+                        unverified_codes.append(code)
 
-            # If we already have 3+ verified outputs, we have enough for a
-            # confident vote — stop sampling to save time for other puzzles.
-            if len(verified_outputs) >= 3:
+                # Stop early if we have 2+ verified outputs for voting
+                if len(verified_outputs) >= 2:
+                    break
+
+            # If no candidates verified directly and time remains, try 1 self-debug
+            # on the best unverified candidate
+            if not verified_outputs and unverified_codes and max_self_debug_retries > 0:
+                if (time_budget_seconds - (time.time() - start)) > 20.0:
+                    verified_code, _stats = self_debug_loop(
+                        llm_client,
+                        unverified_codes[0],
+                        puzzle.train_pairs,
+                        max_retries=1,
+                        timeout_seconds=sandbox_timeout,
+                    )
+                    if verified_code:
+                        state.candidates_verified += 1
+                        test_out = apply_to_test(
+                            verified_code, puzzle.test_inputs[0], sandbox_timeout
+                        )
+                        if test_out is not None:
+                            verified_outputs.append(test_out)
+                            verified_codes.append(verified_code)
+                        candidates.append(
+                            Candidate(
+                                hypothesis=hyp,
+                                code=verified_code,
+                                verification_summary="verified via self-debug",
+                                output_grids=[test_out] if test_out else None,
+                            )
+                        )
+
+            if len(verified_outputs) >= 2:
                 break
 
         if not candidates and should_early_stop(state, early_stop_after_cycles):
