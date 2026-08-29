@@ -57,8 +57,17 @@ def transpose(grid: Grid) -> Grid:
 # Color / objects
 # ---------------------------------------------------------------------------
 
-def recolor(grid: Grid, from_color: int, to_color: int) -> Grid:
-    """Replace all cells of from_color with to_color in grid."""
+def recolor(
+    grid: Grid,
+    from_color: Union[int, Dict[int, int]],
+    to_color: Optional[int] = None,
+) -> Grid:
+    """Replace colors in grid. Accepts either recolor(grid, from_c, to_c) or recolor(grid, {8: 1, 2: 3})."""
+    if isinstance(from_color, dict):
+        mapping = from_color
+        return [[mapping.get(c, c) for c in row] for row in grid]
+    if to_color is None:
+        raise ValueError("to_color is required when from_color is an integer")
     return [[to_color if c == from_color else c for c in row] for row in grid]
 
 
@@ -133,9 +142,14 @@ def overlay(grid_a: Grid, grid_b: Grid, transparent: int = 0) -> Grid:
 # Physics-ish
 # ---------------------------------------------------------------------------
 
-def gravity_drop(grid: Grid, direction: Direction = "down") -> Grid:
+def gravity_drop(
+    grid: Grid,
+    direction: Direction = "down",
+    bg: Optional[int] = None,
+) -> Grid:
     """Slide non-background cells in direction ('up'|'down'|'left'|'right') until blocked."""
-    bg = background_color(grid)
+    if bg is None:
+        bg = background_color(grid)
     h, w = grid_shape(grid)
     out = [[bg for _ in range(w)] for _ in range(h)]
 

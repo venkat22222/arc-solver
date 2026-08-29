@@ -93,6 +93,20 @@ _COMPACT_HELPERS = """Available helper functions in scope:
 - crop_to_bounding_box(grid, bbox), scale_grid(grid, factor_y, factor_x)"""
 
 
+_REFERENCE_EXAMPLE = """Example Pattern:
+Input:
+0 1
+1 0
+Output:
+1 0
+0 1
+Solution:
+```python
+def solve(grid: List[List[int]]) -> List[List[int]]:
+    return reflect_horizontal(grid)
+```"""
+
+
 def build_code_gen_prompt(
     hypothesis: str,
     library_text: str | None = None,
@@ -104,6 +118,10 @@ def build_code_gen_prompt(
         examples_block = f"\n{_format_train_examples_for_codegen(train_pairs)}\n"
 
     return f"""You are solving an ARC visual reasoning puzzle in Python.
+
+{_REFERENCE_EXAMPLE}
+
+Task to Solve:
 {examples_block}
 Hypothesis: "{hypothesis}"
 
@@ -126,6 +144,9 @@ def build_direct_solve_prompt(
 
     return f"""You are solving an ARC visual reasoning puzzle in Python.
 
+{_REFERENCE_EXAMPLE}
+
+Task to Solve:
 {examples_block}
 
 {_COMPACT_HELPERS}
