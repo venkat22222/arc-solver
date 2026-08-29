@@ -26,7 +26,11 @@ from .prompts.abstraction_prompt import (
     is_preserved_geometry,
     parse_hypotheses,
 )
-from .prompts.code_gen_prompt import build_code_gen_prompt, extract_code
+from .prompts.code_gen_prompt import (
+    build_code_gen_prompt,
+    build_direct_solve_prompt,
+    extract_code,
+)
 from .hypothesis_filter import filter_hypotheses
 from .sandbox import safe_execute
 from .self_debug import self_debug_loop
@@ -143,7 +147,42 @@ def solve_puzzle(
     state = EarlyStopState()
     prefer_whole_grid = is_preserved_geometry(constraints)
 
-    # ── Stage 1: LLM hypothesis generation + multi-candidate sampling ──
+    # ── Stage 1: Fast Direct Program-of-Thought (PoT) Synthesis ──
+    # Top competitors generate direct Python candidates first before doing multi-turn abstractions
+    direct_prompt = build_direct_solve_prompt(puzzle.train_pairs, library_text=library_text)
+    for sample_i in range(min(n_candidates, 3)):
+        if time.time() - start > time_budget_seconds:
+            break
+        sample_temp = 0.2 if sample_i == 0 else (0.5 + 0.2 * sample_i)
+        code_raw = llm_client.generate(direct_prompt, temperature=sample_temp)
+        code = extract_code(code_raw)
+        if verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout):
+            state.candidates_verified += 1
+            test_out = apply_to_test(code, puzzle.test_inputs[0], sandbox_timeout)
+            if test_out is not None:
+                verified_outputs.append(test_out)
+                verified_codes.append(code)
+            candidates.append(
+                Candidate(
+                    hypothesis="direct program synthesis",
+                    code=code,
+                    verification_summary="verified on all train pairs",
+                    output_grids=[test_out] if test_out else None,
+                )
+            )
+            # If direct candidate verifies, we have a working solution!
+            if len(verified_outputs) >= 2:
+                break
+
+    # If direct synthesis already produced 2+ verified outputs, return immediately!
+    if len(verified_outputs) >= 2:
+        top_outputs = top_k_by_votes(verified_outputs, k=2)
+        outputs: List[Grid] = list(top_outputs)
+        while len(outputs) < 2:
+            outputs.append(_identity(puzzle.test_inputs[0]))
+        return outputs[:2]
+
+    # ── Stage 2: LLM hypothesis generation + candidate sampling ──
     for cycle in range(n_abstractions):
         if time.time() - start > time_budget_seconds:
             break

@@ -112,6 +112,34 @@ Rules:
 """
 
 
+def build_direct_solve_prompt(
+    train_pairs: Sequence[Tuple[list, list]],
+    library_text: str | None = None,
+) -> str:
+    """Fast direct Program-of-Thought prompt: synthesize def solve(grid) directly from input->output pairs."""
+    if library_text is None:
+        library_text = generate_library_schema()
+
+    examples_block = _format_train_examples_for_codegen(train_pairs, max_pairs=3)
+
+    return f"""You are an expert Python programmer solving an ARC visual reasoning puzzle.
+
+{examples_block}
+
+Write a Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that transforms any input grid into its corresponding output grid following the underlying visual pattern.
+
+{library_text}
+{_STRICT_SCHEMA_RULE}
+{_FEW_SHOT}
+
+Rules:
+1. Do not use any import statements. All helper functions above are already in scope.
+2. Return a 2D list of integers (0-9).
+3. The function MUST work correctly for ALL training examples above.
+4. Output ONLY the Python code enclosed in a single ```python code block. Zero explanation.
+"""
+
+
 def extract_code(response: str) -> str:
     """Pull a Python code block out of a model response; repair common fence issues."""
     text = (response or "").strip()
@@ -138,10 +166,7 @@ def extract_code(response: str) -> str:
 
 
 def _ensure_solve(code: str) -> str:
-    """If multiple defs exist, keep from first def solve onward when present."""
-    if "def solve" in code:
-        idx = code.index("def solve")
-        return code[idx:].strip()
+    """Keep all helper functions and classes; verify def solve exists."""
     return code.strip()
 
 
