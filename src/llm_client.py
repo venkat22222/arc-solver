@@ -449,7 +449,17 @@ class LLMClient:
         assert tok is not None
         if not getattr(tok, "chat_template", None):
             return prompt
-        messages = [{"role": "user", "content": prompt}]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert autonomous Python coding agent specializing in ARC-AGI visual reasoning. "
+                    "Always implement the solution as an executable Python function `def solve(grid: List[List[int]]) -> List[List[int]]` "
+                    "enclosed in a ```python ... ``` block with zero unnecessary chit-chat."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
         try:
             return tok.apply_chat_template(
                 messages,

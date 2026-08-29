@@ -65,20 +65,18 @@ STRICT HELPER RULES:
 """
 
 
-def _format_train_examples_for_codegen(train_pairs: Sequence[Tuple[list, list]], max_pairs: int = 2) -> str:
+def _format_train_examples_for_codegen(train_pairs: Sequence[Tuple[list, list]], max_pairs: int = 3) -> str:
     lines = ["Task Examples (ground-truth input -> output pairs):"]
     for idx, (inp, out) in enumerate(train_pairs[:max_pairs], 1):
         ih, iw = len(inp), len(inp[0]) if inp else 0
         oh, ow = len(out), len(out[0]) if out else 0
         lines.append(f"Example {idx} (input {ih}x{iw} -> output {oh}x{ow}):")
-        if ih <= 10 and iw <= 10:
+        if ih <= 20 and iw <= 20:
             lines.append(f"  Input:  {inp}")
-        else:
-            lines.append(f"  Input:  [shape {ih}x{iw}, first row: {inp[0][:8]}...]")
-        if oh <= 10 and ow <= 10:
             lines.append(f"  Output: {out}")
         else:
-            lines.append(f"  Output: [shape {oh}x{ow}, first row: {out[0][:8]}...]")
+            lines.append(f"  Input:  [shape {ih}x{iw}]")
+            lines.append(f"  Output: [shape {oh}x{ow}]")
     return "\n".join(lines)
 
 
@@ -96,19 +94,22 @@ def build_code_gen_prompt(
     if train_pairs:
         examples_block = f"\n{_format_train_examples_for_codegen(train_pairs)}\n"
 
-    return f"""Implement as Python.
+    return f"""Implement the ARC puzzle solution as Python.
 {examples_block}
 Hypothesis: "{hypothesis}"
 
-Rules:
-- Signature: def solve(grid: List[List[int]]) -> List[List[int]]
-- No imports. Helpers below are already in scope — call by name.
-
 {library_text}
 {_STRICT_SCHEMA_RULE}
-{_COMPOSE_RULE}{whole}{_FEW_SHOT}
+{_COMPOSE_RULE}{whole}
+
+Rules:
+- Signature: def solve(grid: List[List[int]]) -> List[List[int]]
+- No imports. Helpers above are already in scope — call by name.
 - Must produce the exact output for all examples.
-- Output ONLY one ```python fence with the function. Zero explanation.
+- Output ONLY the Python code enclosed in a single ```python code block. Zero explanation.
+
+```python
+def solve(grid: List[List[int]]) -> List[List[int]]:
 """
 
 
@@ -122,21 +123,20 @@ def build_direct_solve_prompt(
 
     examples_block = _format_train_examples_for_codegen(train_pairs, max_pairs=3)
 
-    return f"""You are an expert Python programmer solving an ARC visual reasoning puzzle.
-
+    return f"""Task Specification:
 {examples_block}
 
-Write a Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that transforms any input grid into its corresponding output grid following the underlying visual pattern.
-
+Available Library Helpers (already in scope, no imports needed):
 {library_text}
-{_STRICT_SCHEMA_RULE}
-{_FEW_SHOT}
 
-Rules:
-1. Do not use any import statements. All helper functions above are already in scope.
-2. Return a 2D list of integers (0-9).
-3. The function MUST work correctly for ALL training examples above.
-4. Output ONLY the Python code enclosed in a single ```python code block. Zero explanation.
+Instructions:
+Write the Python function `def solve(grid: List[List[int]]) -> List[List[int]]` that implements the visual transformation from input to output.
+- Must return a 2D list of integers (0-9).
+- Must work for all example pairs above.
+- Output ONLY the python code block starting with ```python and ending with ```.
+
+```python
+def solve(grid: List[List[int]]) -> List[List[int]]:
 """
 
 
