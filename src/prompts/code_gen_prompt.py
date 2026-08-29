@@ -197,39 +197,60 @@ def extract_code(response: str) -> str:
 
 
 def _sanitize_code_lines(code: str) -> str:
-    """First-pass: comment out bare space-separated digit rows.
-    Then: compile-and-repair loop — if a SyntaxError remains, comment out the
-    exact offending line (by line number) and retry, up to 10 times."""
+    """Two-pass sanitizer to turn any generated code into compilable Python.
+
+    Pass 1 – regex scrub: bare space-separated digit rows (e.g. '0 0 3 0')
+              are converted to comments so they don't produce SyntaxErrors.
+
+    Pass 2 – compile-and-repair loop (up to 10 iterations):
+      • 'expected an indented block' → insert '    pass' after the offending def/for/if/else/try/with line
+      • any other SyntaxError → comment out the exact offending line
+    """
     lines = code.splitlines()
 
-    # Pass 1 – regex scrub for obvious bare-matrix lines
+    # ── Pass 1: regex scrub for obvious bare-matrix lines ──────────────────
     cleaned = []
     for line in lines:
         stripped = line.strip()
-        # Bare space-separated digit line (e.g. "0 0 3 0 0")
         if stripped and re.match(r"^[0-9\s,\[\]]+$", stripped) and not stripped.isdigit():
             cleaned.append("    # [scrubbed] " + stripped)
         else:
             cleaned.append(line)
     code = "\n".join(cleaned)
 
-    # Pass 2 – compile-and-repair loop
-    for _ in range(10):
+    # ── Pass 2: compile-and-repair loop ─────────────────────────────────────
+    for _ in range(15):
         try:
             compile(code, "<generated>", "exec")
-            break  # compiles cleanly
+            break
         except SyntaxError as exc:
+            msg = str(exc.msg) if exc.msg else ""
             lineno = exc.lineno  # 1-based
             if lineno is None:
                 break
             code_lines = code.splitlines()
-            idx = lineno - 1
-            if 0 <= idx < len(code_lines):
+            idx = lineno - 1  # 0-based target line
+            if not (0 <= idx < len(code_lines)):
+                break
+
+            if "expected an indented block" in msg:
+                # Find the function/block header that caused this (search backwards)
+                header_idx = idx
+                for scan in range(idx, -1, -1):
+                    s = code_lines[scan].rstrip()
+                    if s.endswith(":") and re.match(r"\s*(def |for |if |else|elif |try|with |class )", s):
+                        header_idx = scan
+                        break
+                # Insert 'pass' on the line right after the header
+                indent = len(code_lines[header_idx]) - len(code_lines[header_idx].lstrip())
+                code_lines.insert(header_idx + 1, " " * (indent + 4) + "pass")
+                code = "\n".join(code_lines)
+            else:
+                # Generic: comment out the offending line
                 bad = code_lines[idx]
                 code_lines[idx] = "    # [repaired] " + bad.strip()
                 code = "\n".join(code_lines)
-            else:
-                break
+
         except Exception:
             break
 
