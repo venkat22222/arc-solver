@@ -169,6 +169,7 @@ def solve_puzzle(
                 hyp,
                 library_text=library_text,
                 prefer_whole_grid=prefer_whole_grid,
+                train_pairs=puzzle.train_pairs,
             )
 
             # ── Multi-candidate sampling: generate N codes, keep verified ──

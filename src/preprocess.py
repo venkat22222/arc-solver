@@ -268,18 +268,21 @@ def should_include_raw(
     """Include raw grids only when object lists are ambiguous (Topic F).
 
     Skip raw by default when every train grid has a usable object list —
-    saves prompt tokens on P100 / API. Fall back to raw when objects are
-    missing or extremely fragmented.
+    saves prompt tokens on P100 / API. For large grids (>15x15), always skip
+    raw to prevent quadratic SDPA attention memory explosion.
     """
     if not train_pairs:
         return True
     for inp, out in train_pairs:
         for g in (inp, out):
+            h, w = grid_shape(g)
+            if h * w > 200:  # Grids larger than ~14x14 should never dump full raw text
+                return False
             bg = background_color(g)
             objs = find_objects(g, connectivity=connectivity, bg=bg)
             if not objs:
                 return True
-            # Too many tiny fragments → object list is noise; raw is clearer.
+            # Too many tiny fragments → object list is noise; raw is clearer for small grids.
             if len(objs) > 18:
                 return True
     return False

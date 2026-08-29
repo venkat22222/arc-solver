@@ -65,17 +65,40 @@ STRICT HELPER RULES:
 """
 
 
+def _format_train_examples_for_codegen(train_pairs: Sequence[Tuple[list, list]], max_pairs: int = 2) -> str:
+    lines = ["Task Examples (ground-truth input -> output pairs):"]
+    for idx, (inp, out) in enumerate(train_pairs[:max_pairs], 1):
+        ih, iw = len(inp), len(inp[0]) if inp else 0
+        oh, ow = len(out), len(out[0]) if out else 0
+        lines.append(f"Example {idx} (input {ih}x{iw} -> output {oh}x{ow}):")
+        if ih <= 10 and iw <= 10:
+            lines.append(f"  Input:  {inp}")
+        else:
+            lines.append(f"  Input:  [shape {ih}x{iw}, first row: {inp[0][:8]}...]")
+        if oh <= 10 and ow <= 10:
+            lines.append(f"  Output: {out}")
+        else:
+            lines.append(f"  Output: [shape {oh}x{ow}, first row: {out[0][:8]}...]")
+    return "\n".join(lines)
+
+
 def build_code_gen_prompt(
     hypothesis: str,
     library_text: str | None = None,
     prefer_whole_grid: bool = False,
+    train_pairs: Sequence[Tuple[list, list]] | None = None,
 ) -> str:
     if library_text is None:
         library_text = generate_library_schema()
 
     whole = _WHOLE_GRID_RULE if prefer_whole_grid else ""
+    examples_block = ""
+    if train_pairs:
+        examples_block = f"\n{_format_train_examples_for_codegen(train_pairs)}\n"
 
-    return f"""Implement as Python. Hypothesis: "{hypothesis}"
+    return f"""Implement as Python.
+{examples_block}
+Hypothesis: "{hypothesis}"
 
 Rules:
 - Signature: def solve(grid: List[List[int]]) -> List[List[int]]
@@ -84,7 +107,7 @@ Rules:
 {library_text}
 {_STRICT_SCHEMA_RULE}
 {_COMPOSE_RULE}{whole}{_FEW_SHOT}
-- No hardcoded coords/sizes — must generalize.
+- Must produce the exact output for all examples.
 - Output ONLY one ```python fence with the function. Zero explanation.
 """
 

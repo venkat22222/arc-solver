@@ -476,14 +476,14 @@ class LLMClient:
         inputs = self._hf_tokenizer(
             text,
             return_tensors="pt",
-            max_length=2048,
+            max_length=1024,
             truncation=True,
         )
         device = self._hf_input_device()
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         gen_kwargs: dict[str, Any] = {
-            "max_new_tokens": min(max_tokens, 512),
+            "max_new_tokens": min(max_tokens, 384),
             "pad_token_id": self._hf_tokenizer.pad_token_id,
             "eos_token_id": self._hf_tokenizer.eos_token_id,
         }
@@ -497,8 +497,24 @@ class LLMClient:
             gen_kwargs["top_p"] = None
             gen_kwargs["top_k"] = None
 
-        with torch.inference_mode():
-            output_ids = self._hf_model.generate(**inputs, **gen_kwargs)
+        try:
+            with torch.inference_mode():
+                output_ids = self._hf_model.generate(**inputs, **gen_kwargs)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            # Retry with shorter prompt context to avoid crashing the notebook
+            short_inputs = {
+                "input_ids": inputs["input_ids"][:, -512:].to(device),
+                "attention_mask": inputs["attention_mask"][:, -512:].to(device),
+            }
+            gen_kwargs["max_new_tokens"] = min(max_tokens, 192)
+            try:
+                with torch.inference_mode():
+                    output_ids = self._hf_model.generate(**short_inputs, **gen_kwargs)
+                inputs = short_inputs
+            except Exception:
+                torch.cuda.empty_cache()
+                return ""
 
         gen = output_ids[0][inputs["input_ids"].shape[-1] :]
         decoded = self._hf_tokenizer.decode(gen, skip_special_tokens=True)
