@@ -162,9 +162,13 @@ def solve_puzzle(
         sample_temp = 0.2 if sample_i == 0 else (0.5 + 0.2 * sample_i)
         code_raw = llm_client.generate(direct_prompt, temperature=sample_temp)
         code = extract_code(code_raw)
+        code_lines = [l.strip() for l in code.splitlines() if l.strip()]
+        snippet = " -> ".join(code_lines[:3]) if code_lines else "EMPTY"
+        print(f"  [Direct Candidate #{sample_i+1}] Code: {snippet[:80]}")
+
         ok, reason = verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout)
         if ok:
-            print(f"  [Direct Candidate #{sample_i+1}] PASSED all train pairs!")
+            print(f"  [Direct Candidate #{sample_i+1}] >>> PASSED ALL TRAIN PAIRS! <<<")
             state.candidates_verified += 1
             test_out = apply_to_test(code, puzzle.test_inputs[0], sandbox_timeout)
             if test_out is not None:
@@ -182,8 +186,7 @@ def solve_puzzle(
             if len(verified_outputs) >= 2:
                 break
         else:
-            first_line = code.splitlines()[0] if code else "EMPTY"
-            print(f"  [Direct Candidate #{sample_i+1}] FAILED: {reason} | head: {first_line[:50]}")
+            print(f"  [Direct Candidate #{sample_i+1}] FAILED: {reason}")
 
     # If direct synthesis already produced 2+ verified outputs, return immediately!
     if len(verified_outputs) >= 2:
@@ -234,10 +237,13 @@ def solve_puzzle(
                 sample_temp = 0.2 if sample_i == 0 else (0.5 + 0.1 * (sample_i % 4))
                 code_raw = llm_client.generate(code_prompt, temperature=sample_temp)
                 code = extract_code(code_raw)
+                code_lines = [l.strip() for l in code.splitlines() if l.strip()]
+                snippet = " -> ".join(code_lines[:3]) if code_lines else "EMPTY"
+                print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] Code: {snippet[:80]}")
 
                 ok, reason = verify_on_all_train(code, puzzle.train_pairs, sandbox_timeout)
                 if ok:
-                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] PASSED all train pairs!")
+                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] >>> PASSED ALL TRAIN PAIRS! <<<")
                     state.candidates_verified += 1
                     test_out = apply_to_test(code, puzzle.test_inputs[0], sandbox_timeout)
                     if test_out is not None:
@@ -252,8 +258,7 @@ def solve_puzzle(
                         )
                     )
                 else:
-                    first_line = code.splitlines()[0] if code else "EMPTY"
-                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] FAILED: {reason} | head: {first_line[:50]}")
+                    print(f"  [Hyp #{hyp_idx} Sample #{sample_i+1}] FAILED: {reason}")
                     if code:
                         unverified_codes.append(code)
 

@@ -509,6 +509,7 @@ class LLMClient:
             gen_kwargs["top_p"] = None
             gen_kwargs["top_k"] = None
 
+        t0 = time.time()
         try:
             with torch.inference_mode():
                 output_ids = self._hf_model.generate(**inputs, **gen_kwargs)
@@ -530,6 +531,8 @@ class LLMClient:
 
         gen = output_ids[0][inputs["input_ids"].shape[-1] :]
         decoded = self._hf_tokenizer.decode(gen, skip_special_tokens=True)
+        t_gen = time.time() - t0
+        print(f"    [LLM Generated: {len(decoded)} chars, {len(gen)} tokens in {t_gen:.2f}s]")
         del inputs, output_ids
         torch.cuda.empty_cache()
         return decoded
